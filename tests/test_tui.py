@@ -57,6 +57,7 @@ from workspace_session_manager.tui import (
     humanize_task,
     relative_activity,
     session_group,
+    session_option_id,
     sparkline,
 )
 
@@ -948,7 +949,9 @@ async def test_refresh_preserves_selection_filter_and_list_scroll(
         await pilot.pause()
         options = app.query_one("#sessions", OptionList)
         target = app.visible_sessions[20]
-        options.highlighted = options.get_option_index(f"session:{target.session_id}")
+        options.highlighted = options.get_option_index(
+            session_option_id(target.name, target.session_id)
+        )
         app.filter_query = "session"
         options.scroll_to(y=20, animate=False, force=True)
         await pilot.pause()
@@ -959,6 +962,29 @@ async def test_refresh_preserves_selection_filter_and_list_scroll(
         assert app.selected_name == target.name
         assert app.filter_query == "session"
         assert options.scroll_offset.y == before_scroll
+
+
+@pytest.mark.asyncio
+async def test_sessions_from_different_backends_can_share_a_tmux_id(
+    service: SessionService,
+    fake_backend: FakeBackend,
+) -> None:
+    """Tool backends can both report IDs such as ``$1``."""
+    claude = fake_backend.add("claude-shared-id", session_id="$1", command="claude")
+    codex = fake_backend.add("codex-shared-id", session_id="$1", command="codex")
+    app = WsApp(service, monochrome=False, onboarding=False)
+    app.show_unmanaged = True
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        options = app.query_one("#sessions", OptionList)
+        claude_id = session_option_id(claude.name, claude.session_id)
+        codex_id = session_option_id(codex.name, codex.session_id)
+        assert claude_id != codex_id
+        assert options.get_option(claude_id)
+        assert options.get_option(codex_id)
+        assert app._option_sessions[claude_id].name == claude.name
+        assert app._option_sessions[codex_id].name == codex.name
 
 
 @pytest.mark.asyncio
@@ -1006,7 +1032,8 @@ async def test_ascii_mode_uses_text_separators_and_navigation(
         footer = str(app.query_one("#action-bar", Static).content)
         assert "Up/Down/jk Nav" in footer
         options = app.query_one("#sessions", OptionList)
-        option = options.get_option(f"session:{app.visible_sessions[0].session_id}")
+        session = app.visible_sessions[0]
+        option = options.get_option(session_option_id(session.name, session.session_id))
         assert " · " not in str(option.prompt)
 
 
@@ -1494,7 +1521,9 @@ async def test_ctrl_enter_requires_current_validation_and_updates_grouped_list(
         assert app.selected_name == "claude-api-refactor"
         assert service.get("claude-api-refactor").display_name == "api_refactor"
         created = service.get("claude-api-refactor")
-        option = app.query_one("#sessions", OptionList).get_option(f"session:{created.session_id}")
+        option = app.query_one("#sessions", OptionList).get_option(
+            session_option_id(created.name, created.session_id)
+        )
         flash_color = app._theme_colors.get("primary", "#243d55")
         assert any(flash_color in str(span.style) for span in option.prompt.spans)
 
@@ -1587,7 +1616,9 @@ async def test_usage_limit_updates_header_row_activity_and_agent_state(
         )
         assert "Agent         Paused" in str(app.query_one("#runtime-status", Static).content)
         session = app.sessions[0]
-        option = app.query_one("#sessions", OptionList).get_option(f"session:{session.session_id}")
+        option = app.query_one("#sessions", OptionList).get_option(
+            session_option_id(session.name, session.session_id)
+        )
         assert "!" in str(option.prompt)
         summary = str(app.query_one("#recent-output", Static).content)
         assert "tmux session remains active" in summary
@@ -1625,7 +1656,7 @@ async def test_attention_scan_finds_unselected_warning_and_restores_temporary_vi
         limited_view = next(session for session in app.sessions if session.name == limited)
         prompt = (
             app.query_one("#sessions", OptionList)
-            .get_option(f"session:{limited_view.session_id}")
+            .get_option(session_option_id(limited_view.name, limited_view.session_id))
             .prompt
         )
         assert "!" in str(prompt)
@@ -1754,7 +1785,7 @@ async def test_activity_sparkline_appears_only_after_enough_samples_at_wide_widt
         assert len(history) >= ACTIVITY_SPARK_MIN_SAMPLES
         prompt = str(
             app.query_one("#sessions", OptionList)
-            .get_option(f"session:{other_view.session_id}")
+            .get_option(session_option_id(other_view.name, other_view.session_id))
             .prompt
         )
         assert any(glyph in prompt for glyph in "▁▂▃▄▅▆▇█")

@@ -469,6 +469,16 @@ def session_group(session: SessionView, *, now: datetime | None = None) -> str:
     return "Detached"
 
 
+def session_option_id(name: str, session_id: str) -> str:
+    """Return the unique Textual option ID for a tmux session.
+
+    tmux session IDs are only unique within a tmux server.  The dashboard can
+    show sessions from multiple tool backends, so use the session name as well
+    to avoid collisions such as Claude's ``$1`` and Codex's ``$1``.
+    """
+    return f"session:{name}:{session_id}"
+
+
 def build_session_groups(
     sessions: Sequence[SessionView],
     *,
@@ -4378,7 +4388,7 @@ class WsApp(App[str | None]):
         for session in self.sessions:
             if session.pinned or not is_warning(session, self._notice_for(session)):
                 continue
-            option_id = f"session:{session.session_id}"
+            option_id = session_option_id(session.name, session.session_id)
             if option_id not in self._option_sessions:
                 continue
             prompt = session_row(
@@ -4721,7 +4731,7 @@ class WsApp(App[str | None]):
         )
         if observed_at is not None and self._attention_eligible(session):
             self._attention_scanned_at[identity] = observed_at
-        option_id = f"session:{session.session_id}"
+        option_id = session_option_id(session.name, session.session_id)
         if option_id in self._option_sessions:
             prompt = session_row(
                 session,
@@ -4750,8 +4760,10 @@ class WsApp(App[str | None]):
             (item for item in self.sessions if item.name == name and item.session_id == session_id),
             None,
         )
-        option_id = f"session:{session_id}"
-        if session is None or option_id not in self._option_sessions:
+        if session is None:
+            return
+        option_id = session_option_id(session.name, session_id)
+        if option_id not in self._option_sessions:
             return
         self.query_one("#sessions", OptionList).replace_option_prompt(
             option_id,
@@ -4889,7 +4901,7 @@ class WsApp(App[str | None]):
                 continue
             options.add_option(self._heading_option(f"{group_name} ({len(group_sessions)})"))
             for session in group_sessions:
-                option_id = f"session:{session.session_id}"
+                option_id = session_option_id(session.name, session.session_id)
                 self._option_sessions[option_id] = session
                 options.add_option(
                     Option(
@@ -5493,10 +5505,12 @@ class WsApp(App[str | None]):
         ):
             return
         context = self._capture_dashboard_context()
-        if context.selected_session_id is not None:
+        if context.selected_name is not None and context.selected_session_id is not None:
             context = replace(
                 context,
-                highlighted_option_id=f"session:{context.selected_session_id}",
+                highlighted_option_id=session_option_id(
+                    context.selected_name, context.selected_session_id
+                ),
             )
         self._attention_context = context
         self._close_narrow_detail(restore_focus=False)
@@ -5667,7 +5681,7 @@ class WsApp(App[str | None]):
         self.selected_name = session.name
         self.selected_session_id = session.session_id
         self._render_options()
-        option_id = f"session:{session.session_id}"
+        option_id = session_option_id(session.name, session.session_id)
         options = self.query_one("#sessions", OptionList)
         if option_id in self._option_sessions:
             options.highlighted = options.get_option_index(option_id)
@@ -5696,8 +5710,10 @@ class WsApp(App[str | None]):
             (item for item in self.sessions if item.name == name and item.session_id == session_id),
             None,
         )
-        option_id = f"session:{session_id}"
-        if session is None or option_id not in self._option_sessions:
+        if session is None:
+            return
+        option_id = session_option_id(session.name, session_id)
+        if option_id not in self._option_sessions:
             return
         prompt = session_row(
             session,
