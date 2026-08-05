@@ -183,6 +183,7 @@ def enable_health(
                 zombie_sessions_enabled=False,
                 idle_sessions_enabled=False,
                 orphaned_logs_enabled=False,
+                missing_cwd_enabled=False,
                 disk_ttl_seconds=5.0,
                 disk_warn_percent=disk_warn_percent,
                 disk_fail_percent=disk_fail_percent,

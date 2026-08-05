@@ -9,6 +9,7 @@ from workspace_session_manager.health import (
     docker_containers_check,
     git_dirty_repos_check,
     idle_live_sessions_check,
+    missing_cwd_check,
     orphaned_logs_check,
     reboot_required_check,
     zombie_sessions_check,
@@ -174,12 +175,14 @@ def test_git_dirty_repos_check_isolates_per_repo_failure(tmp_path: Path, monkeyp
     assert check.status is HealthStatus.PASS
 
 
-def _record(name: str, *, last_attached_at: datetime) -> SessionMetadata:
+def _record(
+    name: str, *, last_attached_at: datetime, cwd: Path = Path("/tmp")
+) -> SessionMetadata:
     return SessionMetadata(
         tmux_session_id="$1",
         name=name,
         tool=Tool.CLAUDE,
-        cwd=Path("/tmp"),
+        cwd=cwd,
         last_attached_at=last_attached_at,
     )
 
@@ -354,3 +357,28 @@ def test_orphaned_logs_check_pass_is_not_fixable(tmp_path: Path) -> None:
     )
     assert not check.fixable
     assert check.affected == []
+
+
+def test_missing_cwd_check_pass_when_directory_exists(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    records = {"claude-ok": _record("claude-ok", last_attached_at=now, cwd=tmp_path)}
+    check = missing_cwd_check(records, live_names=set())
+    assert check.status is HealthStatus.PASS
+
+
+def test_missing_cwd_check_warns_on_missing_directory(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    gone = tmp_path / "gone"
+    records = {"claude-gone": _record("claude-gone", last_attached_at=now, cwd=gone)}
+    check = missing_cwd_check(records, live_names=set())
+    assert check.status is HealthStatus.WARN
+    assert "claude-gone" in check.detail
+    assert check.corrective_action
+
+
+def test_missing_cwd_check_ignores_live_sessions(tmp_path: Path) -> None:
+    now = datetime.now(UTC)
+    gone = tmp_path / "gone"
+    records = {"claude-gone": _record("claude-gone", last_attached_at=now, cwd=gone)}
+    check = missing_cwd_check(records, live_names={"claude-gone"})
+    assert check.status is HealthStatus.PASS

@@ -31,6 +31,7 @@ from workspace_session_manager.health import (
     docker_containers_check,
     git_dirty_repos_check,
     idle_live_sessions_check,
+    missing_cwd_check,
     orphaned_logs_check,
     reboot_required_check,
     zombie_sessions_check,
@@ -1290,6 +1291,15 @@ class SessionService:
                     {str(record.record_id) for record in self.store.load_all().values()},
                     now=utc_now(),
                     min_age=timedelta(hours=health.orphaned_logs_min_age_hours),
+                ),
+            ),
+            HealthCheckSpec(
+                name="missing-cwd",
+                enabled=health.enabled and health.missing_cwd_enabled,
+                ttl_seconds=health.missing_cwd_ttl_seconds,
+                run=lambda: missing_cwd_check(
+                    self.store.load_all(),
+                    {session.name for session in self.backend.list_sessions()},
                 ),
             ),
         )

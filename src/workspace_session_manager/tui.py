@@ -2490,6 +2490,7 @@ def diagnostic_name(check: HealthCheck) -> str:
         "zombie-sessions": "Zombie sessions",
         "idle-sessions": "Idle sessions",
         "orphaned-logs": "Orphaned logs",
+        "missing-cwd": "Missing working directories",
     }
     return labels.get(check.name, display_state(check.name))
 

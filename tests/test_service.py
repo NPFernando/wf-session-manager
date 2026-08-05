@@ -726,6 +726,7 @@ def _disk_only_service(tmp_path: Path, fake_backend: FakeBackend) -> SessionServ
             zombie_sessions_enabled=False,
             idle_sessions_enabled=False,
             orphaned_logs_enabled=False,
+            missing_cwd_enabled=False,
             disk_ttl_seconds=5.0,
         ),
     )
@@ -849,6 +850,7 @@ def _hygiene_only_service(
             reboot_required_enabled=False,
             git_dirty_enabled=False,
             docker_enabled=False,
+            missing_cwd_enabled=False,
             **health_overrides,
         ),
     )

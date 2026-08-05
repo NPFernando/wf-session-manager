@@ -248,6 +248,39 @@ def idle_live_sessions_check(
     )
 
 
+def missing_cwd_check(
+    records: Mapping[str, SessionMetadata],
+    live_names: Set[str],
+) -> HealthCheck:
+    """Flag stopped sessions whose recorded cwd no longer exists.
+
+    tmux silently falls back to the process's default directory when `-c`
+    points at a missing path, so resuming one of these sessions would land
+    in the wrong place with no error -- this surfaces it ahead of time.
+    """
+    missing = [
+        record
+        for name, record in records.items()
+        if name not in live_names and not record.cwd.is_dir()
+    ]
+    if not missing:
+        return HealthCheck(
+            name="missing-cwd", status=HealthStatus.PASS, detail="no missing working directories"
+        )
+    return HealthCheck(
+        name="missing-cwd",
+        status=HealthStatus.WARN,
+        detail=(
+            f"{len(missing)} stopped session(s) with a missing working directory: "
+            f"{_format_names([record.name for record in missing])}"
+        ),
+        corrective_action=(
+            "Resuming would silently fall back to the home directory; "
+            "`ws delete <name>` if the session is no longer needed."
+        ),
+    )
+
+
 def orphaned_logs_check(
     logs_dir: Path,
     known_record_ids: Set[str],
