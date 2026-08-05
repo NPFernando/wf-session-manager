@@ -24,6 +24,7 @@ def write_legacy(
     tags: tuple[str, ...] = (),
     state: str = "active",
     pinned: bool = False,
+    project: str = "",
 ) -> None:
     root.mkdir(parents=True, exist_ok=True)
     values = {"tool": tool, "cwd": cwd, "note": note, "state": state}
@@ -33,6 +34,8 @@ def write_legacy(
         (root / f"{name}.tags").write_text("\n".join(tags) + "\n", encoding="utf-8")
     if pinned:
         (root / f"{name}.pinned").touch()
+    if project:
+        (root / f"{name}.project").write_text(f"{project}\n", encoding="utf-8")
 
 
 def make_manager(
@@ -78,6 +81,18 @@ def test_preview_writes_private_exact_id_plan(tmp_path: Path, fake_backend: Fake
     assert manager.validate_plan(plan_path) == plan
     assert not manager.paths.migrations_dir.exists()
     assert fake_backend.get_option("claude-old", "@wf_owner") is None
+
+
+def test_preview_rejects_oversized_legacy_project_name(
+    tmp_path: Path, fake_backend: FakeBackend
+) -> None:
+    legacy = tmp_path / "legacy"
+    write_legacy(legacy, "claude-old", project="p" * 250)
+    fake_backend.add("claude-old", session_id="$17", command="claude")
+    manager = make_manager(tmp_path, fake_backend, (legacy,))
+
+    with pytest.raises(MigrationError, match="project name exceeds 200 characters"):
+        manager.preview(["claude-old"])
 
 
 def test_plan_reader_rejects_non_private_permissions(

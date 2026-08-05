@@ -270,6 +270,8 @@ class MigrationManager:
             raise MigrationError(f"no absolute working directory available for {session.name}")
         if len(legacy.note) > 2000:
             raise MigrationError(f"legacy note exceeds 2000 characters for {session.name}")
+        if legacy.project and len(legacy.project.name) > 200:
+            raise MigrationError(f"legacy project name exceeds 200 characters for {session.name}")
         if len(legacy.tags) > 12 or any(
             not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", tag) for tag in legacy.tags
         ):

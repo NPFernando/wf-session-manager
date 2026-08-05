@@ -198,6 +198,8 @@ class PresetStore:
         self.paths.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self.paths.state_dir, 0o700)
         path = self.paths.presets_file
+        if path.is_symlink():
+            raise StateError(f"refusing symlinked presets file: {path.name}")
         payload = json.dumps(
             {name: json.loads(preset.model_dump_json()) for name, preset in presets.items()},
             indent=2,

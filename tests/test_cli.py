@@ -487,6 +487,49 @@ def test_migration_preview_requires_explicit_selection() -> None:
     assert "choose --all or at least one --session" in result.output
 
 
+def test_inspect_survives_malicious_markup_in_note_without_crashing(
+    service: SessionService,
+    fake_backend: FakeBackend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A stray closing tag like "[/bold]" in a note -- plausible in real
+    text, no attacker required -- must not raise rich.errors.MarkupError
+    and crash `ws inspect`."""
+    monkeypatch.setattr(Runtime, "service", lambda self: service)
+    session = service.create(CreateRequest(name="claude-markup", tool=Tool.CLAUDE, cwd=tmp_path))
+    service.update_note(session.name, "stray tag [/bold] and [bold]styled[/bold] text")
+    result = CliRunner().invoke(cli.app, ["inspect", session.name])
+    assert result.exit_code == 0, result.output
+    assert "stray tag [/bold] and [bold]styled[/bold] text" in result.output
+
+
+def test_preset_list_rejects_malicious_markup_in_project_without_crashing(
+    service: SessionService,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(Runtime, "service", lambda self: service)
+    service.save_preset("backend-dev", tool=Tool.SHELL, cwd=tmp_path, project="[/bold] api")
+    result = CliRunner().invoke(cli.app, ["preset", "list"])
+    assert result.exit_code == 0, result.output
+    assert "[/bold] api" in result.output
+
+
+def test_preset_list_reports_corrupt_presets_file_cleanly(
+    service: SessionService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Runtime, "service", lambda self: service)
+    service.paths.presets_file.parent.mkdir(parents=True, exist_ok=True)
+    target = service.paths.presets_file.parent / "outside.json"
+    target.write_text("{}", encoding="utf-8")
+    service.paths.presets_file.symlink_to(target)
+    result = CliRunner().invoke(cli.app, ["preset", "list"])
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+
+
 def test_redact_report_strips_ipv4_from_check_detail() -> None:
     report = DoctorReport(
         checks=[HealthCheck(name="probe", status=HealthStatus.WARN, detail="peer 10.0.0.5 seen")]

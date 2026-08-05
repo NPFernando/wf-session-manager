@@ -103,6 +103,20 @@ def test_preset_store_rejects_symlinked_presets_file(tmp_path: Path) -> None:
         PresetStore(paths).load_all()
 
 
+def test_preset_store_write_unlocked_rejects_symlinked_presets_file(tmp_path: Path) -> None:
+    """`_write_unlocked` guards symlinks on its own, independent of the
+    `_read_all_unlocked` check `save()` happens to run first."""
+    paths = AppPaths(tmp_path / "config", tmp_path / "state", tmp_path / "cache")
+    paths.state_dir.mkdir(parents=True)
+    target = tmp_path / "outside.json"
+    target.write_text("{}", encoding="utf-8")
+    paths.presets_file.symlink_to(target)
+    store = PresetStore(paths)
+    preset = Preset(name="backend-dev", tool=Tool.SHELL, cwd=tmp_path)
+    with pytest.raises(StateError, match="symlinked"):
+        store._write_unlocked({"backend-dev": preset})
+
+
 def test_interface_preferences_store_returns_defaults_without_creating_state(
     tmp_path: Path,
 ) -> None:

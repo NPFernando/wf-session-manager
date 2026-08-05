@@ -12,6 +12,7 @@ from uuid import UUID
 
 import typer
 from rich.console import Console
+from rich.markup import escape as escape_markup
 from rich.table import Table
 
 from workspace_session_manager import __version__
@@ -29,7 +30,7 @@ from workspace_session_manager.models import (
     Tool,
 )
 from workspace_session_manager.paths import AppPaths
-from workspace_session_manager.security import redact_text
+from workspace_session_manager.security import redact_text, sanitize_terminal
 from workspace_session_manager.service import SessionService
 from workspace_session_manager.store import MetadataStore
 from workspace_session_manager.tmux import TmuxBackend
@@ -44,6 +45,14 @@ app = typer.Typer(
 )
 console = Console()
 error_console = Console(stderr=True)
+
+
+def _display_safe(text: str) -> str:
+    """Neutralize control bytes and Rich markup before printing untrusted
+    text (session notes, legacy-migrated metadata, pane output) -- a stray
+    "[/bold]"-shaped substring otherwise raises MarkupError, and terminal
+    escape sequences would otherwise render live."""
+    return escape_markup(sanitize_terminal(text))
 migration_app = typer.Typer(help="Preview, apply, inspect, and roll back session adoption.")
 app.add_typer(migration_app, name="migrate")
 preset_app = typer.Typer(help="Save, list, and delete create-session presets.")
@@ -228,9 +237,9 @@ def inspect(
     console.print(f"Input: {session.input_state.value}")
     console.print("Ownership: managed")
     console.print(f"Directory: {session.cwd}")
-    console.print(f"Note: {session.note or '-'}")
+    console.print(f"Note: {_display_safe(session.note) if session.note else '-'}")
     console.rule("Sanitized preview")
-    console.print(details.preview or "No pane output")
+    console.print(_display_safe(details.preview) if details.preview else "No pane output")
 
 
 @app.command()
@@ -341,7 +350,11 @@ def preset_list(
     as_json: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON.")] = False,
 ) -> None:
     """List saved create-session presets."""
-    presets = runtime_from_context(context).service().list_presets()
+    try:
+        presets = runtime_from_context(context).service().list_presets()
+    except WsError as error:
+        abort(error)
+        return
     if as_json:
         typer.echo(json.dumps([item.model_dump(mode="json") for item in presets], indent=2))
         return
@@ -357,7 +370,7 @@ def preset_list(
             preset.name,
             preset.tool.value,
             str(preset.cwd),
-            preset.project,
+            _display_safe(preset.project),
             ", ".join(preset.tags),
             "enabled" if preset.logging_enabled else "disabled",
         )
