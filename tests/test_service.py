@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -134,6 +135,27 @@ def test_missing_tool_fails_before_tmux_creation(
     with pytest.raises(ToolUnavailableError):
         service.create(CreateRequest(name="missing", tool=Tool.CLAUDE, cwd=tmp_path))
     assert fake_backend.sessions == {}
+
+
+def test_restart_refuses_when_tool_disabled_in_configuration(
+    service: SessionService,
+    fake_backend: FakeBackend,
+    tmp_path: Path,
+) -> None:
+    created = service.create(CreateRequest(name="disable-me", tool=Tool.CLAUDE, cwd=tmp_path))
+    disabled = service.config.model_copy(
+        update={
+            "tools": {
+                **service.config.tools,
+                Tool.CLAUDE: service.config.tools[Tool.CLAUDE].model_copy(
+                    update={"enabled": False}
+                ),
+            }
+        }
+    )
+    service.config = disabled
+    with pytest.raises(ToolUnavailableError):
+        service.restart(created.name)
 
 
 def test_attach_refuses_name_reused_after_ownership_check(
@@ -819,6 +841,36 @@ def test_cached_health_alerts_treats_corrupt_cache_file_as_uncached(
     service.paths.health_dir.mkdir(parents=True)
     (service.paths.health_dir / "disk-space.json").write_text("not json", encoding="utf-8")
     checks = service.cached_health_alerts()
+    assert checks[0].detail == "not yet checked"
+
+
+def test_write_health_cache_refuses_to_follow_a_symlinked_cache_file(
+    tmp_path: Path, fake_backend: FakeBackend
+) -> None:
+    service = _disk_only_service(tmp_path, fake_backend)
+    service.paths.health_dir.mkdir(parents=True)
+    outside_target = tmp_path / "outside.json"
+    outside_target.write_text("not touched", encoding="utf-8")
+    (service.paths.health_dir / "disk-space.json").symlink_to(outside_target)
+
+    service.refresh_health_alerts(force=True)
+
+    assert outside_target.read_text(encoding="utf-8") == "not touched"
+
+
+def test_read_health_cache_ignores_a_symlinked_cache_file(
+    tmp_path: Path, fake_backend: FakeBackend
+) -> None:
+    service = _disk_only_service(tmp_path, fake_backend)
+    service.paths.health_dir.mkdir(parents=True)
+    outside_target = tmp_path / "outside.json"
+    outside_target.write_text(
+        json.dumps({"checked_at": "2020-01-01T00:00:00+00:00", "check": {}}), encoding="utf-8"
+    )
+    (service.paths.health_dir / "disk-space.json").symlink_to(outside_target)
+
+    checks = service.cached_health_alerts()
+
     assert checks[0].detail == "not yet checked"
 
 

@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import stat
+import tempfile
 import tomllib
 import unicodedata
 from collections.abc import Callable, Sequence
@@ -1025,6 +1026,8 @@ class SessionService:
         record = self._managed_record(name)
         profile = self.config.tools[record.tool]
         shell_profile = self.config.tools[Tool.SHELL]
+        if not profile.enabled:
+            raise ToolUnavailableError(f"{record.tool.value} is disabled in configuration")
         if not command_available(profile.command):
             raise ToolUnavailableError(f"command not found: {profile.command[0]}")
         if not command_available(shell_profile.command):
@@ -1308,8 +1311,11 @@ class SessionService:
         return self.paths.health_dir / f"{name}.json"
 
     def _read_health_cache(self, name: str) -> tuple[HealthCheck, datetime] | None:
+        path = self._health_cache_path(name)
         try:
-            raw = json.loads(self._health_cache_path(name).read_text(encoding="utf-8"))
+            if path.is_symlink():
+                return None
+            raw = json.loads(path.read_text(encoding="utf-8"))
             checked_at = datetime.fromisoformat(raw["checked_at"])
             check = HealthCheck.model_validate(raw["check"])
         except (OSError, ValueError, KeyError, TypeError):
@@ -1318,15 +1324,26 @@ class SessionService:
 
     def _write_health_cache(self, name: str, check: HealthCheck) -> None:
         self.paths.health_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(self.paths.health_dir, 0o700)
         path = self._health_cache_path(name)
+        if path.is_symlink():
+            return
         payload = json.dumps({"checked_at": utc_now().isoformat(), "check": check.model_dump()})
-        temporary = path.with_suffix(".json.tmp")
+        temporary_name: str | None = None
         try:
-            temporary.write_text(payload, encoding="utf-8")
-            os.replace(temporary, path)
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{path.name}.", dir=self.paths.health_dir
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(temporary_name, 0o600)
+            os.replace(temporary_name, path)
         except OSError:
-            with contextlib.suppress(OSError):
-                temporary.unlink()
+            if temporary_name:
+                with contextlib.suppress(OSError):
+                    Path(temporary_name).unlink()
 
     def cached_health_alerts(self) -> list[HealthCheck]:
         """Read-only, subprocess-free: safe to call synchronously on startup."""

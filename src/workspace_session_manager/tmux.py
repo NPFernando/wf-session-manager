@@ -189,19 +189,24 @@ class TmuxBackend:
         if self.session_exists(name):
             raise SessionExistsError(f"session already exists: {name}")
 
-        result = self._run(
-            "new-session",
-            "-d",
-            "-P",
-            "-F",
-            "#{session_id}",
-            "-s",
-            name,
-            "-c",
-            str(cwd),
-            "--",
-            *shell_command,
-        )
+        try:
+            result = self._run(
+                "new-session",
+                "-d",
+                "-P",
+                "-F",
+                "#{session_id}",
+                "-s",
+                name,
+                "-c",
+                str(cwd),
+                "--",
+                *shell_command,
+            )
+        except TmuxError as error:
+            if "duplicate session" in str(error).lower():
+                raise SessionExistsError(f"session already exists: {name}") from error
+            raise
         created_id = result.stdout.strip()
         try:
             self.set_option(
@@ -319,7 +324,12 @@ class TmuxBackend:
         target = self._session_target(old_name, expected_id)
         if self.session_exists(new_name):
             raise SessionExistsError(f"session already exists: {new_name}")
-        self._run("rename-session", "-t", target, new_name)
+        try:
+            self._run("rename-session", "-t", target, new_name)
+        except TmuxError as error:
+            if "duplicate session" in str(error).lower():
+                raise SessionExistsError(f"session already exists: {new_name}") from error
+            raise
 
     def kill_session(self, name: str, expected_id: str | None = None) -> None:
         target = self._session_target(name, expected_id)

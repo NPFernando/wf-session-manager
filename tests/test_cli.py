@@ -11,7 +11,15 @@ from workspace_session_manager.cli import Runtime
 from workspace_session_manager.config import AppConfig, HealthConfig
 from workspace_session_manager.legacy import LegacyMetadataReader
 from workspace_session_manager.migration import MigrationManager
-from workspace_session_manager.models import CreateRequest, InputState, TaskState, Tool
+from workspace_session_manager.models import (
+    CreateRequest,
+    DoctorReport,
+    HealthCheck,
+    HealthStatus,
+    InputState,
+    TaskState,
+    Tool,
+)
 from workspace_session_manager.paths import AppPaths
 from workspace_session_manager.service import SessionService
 from workspace_session_manager.store import MetadataStore
@@ -138,6 +146,29 @@ def test_preset_save_list_and_delete_round_trip(
     assert delete_result.exit_code == 0, delete_result.output
     assert "Deleted preset: backend-dev" in delete_result.stdout
     assert service.list_presets() == []
+
+
+def test_preset_save_resolves_relative_cwd_at_save_time(
+    service: SessionService,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A relative --cwd must be anchored to where it was saved, not
+    re-resolved against the directory `create --from-preset` is later run
+    from -- otherwise the same preset silently creates sessions in different
+    places depending on the caller's cwd."""
+    nested = tmp_path / "project"
+    nested.mkdir()
+    monkeypatch.setattr(Runtime, "service", lambda self: service)
+    monkeypatch.chdir(nested)
+    runner = CliRunner()
+
+    save_result = runner.invoke(
+        cli.app,
+        ["preset", "save", "here", "--tool", "shell", "--cwd", "."],
+    )
+    assert save_result.exit_code == 0, save_result.output
+    assert service.get_preset("here").cwd == nested.resolve()
 
 
 def test_preset_delete_missing_preset_errors(
@@ -454,6 +485,33 @@ def test_migration_preview_requires_explicit_selection() -> None:
     result = CliRunner().invoke(cli.app, ["migrate", "preview"])
     assert result.exit_code == 2
     assert "choose --all or at least one --session" in result.output
+
+
+def test_redact_report_strips_ipv4_from_check_detail() -> None:
+    report = DoctorReport(
+        checks=[HealthCheck(name="probe", status=HealthStatus.WARN, detail="peer 10.0.0.5 seen")]
+    )
+    redacted = cli._redact_report(report)
+    assert "10.0.0.5" not in redacted.checks[0].detail
+    assert "[REDACTED_IP]" in redacted.checks[0].detail
+
+
+def test_doctor_command_redacts_check_detail(
+    service: SessionService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(Runtime, "service", lambda self: service)
+    monkeypatch.setattr(
+        service,
+        "doctor",
+        lambda: DoctorReport(
+            checks=[HealthCheck(name="probe", status=HealthStatus.PASS, detail="peer 10.0.0.5")]
+        ),
+    )
+    result = CliRunner().invoke(cli.app, ["doctor"])
+    assert result.exit_code == 0, result.output
+    assert "10.0.0.5" not in result.stdout
+    assert "[REDACTED_IP]" in result.stdout
 
 
 def test_health_command_reports_configured_checks(

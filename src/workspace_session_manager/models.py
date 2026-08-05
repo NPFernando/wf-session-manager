@@ -19,6 +19,12 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def require_absolute_cwd(value: Path) -> Path:
+    if not value.is_absolute():
+        raise ValueError("working directory must be absolute")
+    return value
+
+
 def normalize_tags(values: list[str]) -> list[str]:
     cleaned: list[str] = []
     for value in values:
@@ -196,9 +202,7 @@ class SessionMetadata(BaseModel):
     @field_validator("cwd")
     @classmethod
     def absolute_cwd(cls, value: Path) -> Path:
-        if not value.is_absolute():
-            raise ValueError("working directory must be absolute")
-        return value
+        return require_absolute_cwd(value)
 
     @field_validator("tags")
     @classmethod
@@ -283,6 +287,11 @@ class CreateRequest(BaseModel):
     logging_enabled: bool = True
     automatic_prefix: bool = True
 
+    @field_validator("cwd")
+    @classmethod
+    def absolute_cwd(cls, value: Path) -> Path:
+        return require_absolute_cwd(value)
+
     @field_validator("tags")
     @classmethod
     def valid_tags(cls, values: list[str]) -> list[str]:
@@ -299,6 +308,11 @@ class Preset(BaseModel):
     project: Annotated[str, Field(max_length=200)] = ""
     tags: Annotated[list[str], Field(max_length=12)] = Field(default_factory=list)
     logging_enabled: bool = True
+
+    @field_validator("cwd")
+    @classmethod
+    def absolute_cwd(cls, value: Path) -> Path:
+        return require_absolute_cwd(value)
 
     @field_validator("tags")
     @classmethod

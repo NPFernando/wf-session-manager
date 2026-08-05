@@ -29,6 +29,7 @@ from workspace_session_manager.models import (
     Tool,
 )
 from workspace_session_manager.paths import AppPaths
+from workspace_session_manager.security import redact_text
 from workspace_session_manager.service import SessionService
 from workspace_session_manager.store import MetadataStore
 from workspace_session_manager.tmux import TmuxBackend
@@ -279,10 +280,11 @@ def create(
     if resolved_tool is None:
         abort(WsError("--tool is required unless --from-preset/--from-session supplies one"))
         return
+    resolved_cwd = cwd if cwd is not None else (template.cwd if template else Path.cwd())
     request = CreateRequest(
         name=name,
         tool=resolved_tool,
-        cwd=cwd if cwd is not None else (template.cwd if template else Path.cwd()),
+        cwd=resolved_cwd.expanduser().resolve(),
         project=project or (template.project if template else ""),
         note=note,
         tags=tag if tag is not None else (list(template.tags) if template else []),
@@ -320,7 +322,12 @@ def preset_save(
     service = runtime_from_context(context).service()
     try:
         preset = service.save_preset(
-            name, tool=tool, cwd=cwd, project=project, tags=tag or [], logging_enabled=logging
+            name,
+            tool=tool,
+            cwd=cwd.expanduser().resolve(),
+            project=project,
+            tags=tag or [],
+            logging_enabled=logging,
         )
     except WsError as error:
         abort(error)
@@ -468,13 +475,24 @@ def delete(
     typer.echo(f"Deleted {name}")
 
 
+def _redact_report(report: DoctorReport) -> DoctorReport:
+    """Redact check details before they reach the terminal/a pipe -- the
+    diagnostics-export path already treats these strings as sensitive."""
+    return DoctorReport(
+        checks=[
+            check.model_copy(update={"detail": redact_text(check.detail)})
+            for check in report.checks
+        ]
+    )
+
+
 @app.command()
 def doctor(
     context: typer.Context,
     as_json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     """Check tmux, agent commands, state, and migration readiness."""
-    report = runtime_from_context(context).service().doctor()
+    report = _redact_report(runtime_from_context(context).service().doctor())
     if as_json:
         typer.echo(report.model_dump_json(indent=2))
     else:
@@ -511,7 +529,7 @@ def health(
             abort(error)
             return
     checks = service.refresh_health_alerts(force=True)
-    report = DoctorReport(checks=checks)
+    report = _redact_report(DoctorReport(checks=checks))
     if as_json:
         typer.echo(report.model_dump_json(indent=2))
     else:

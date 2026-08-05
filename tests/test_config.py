@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from workspace_session_manager.config import AppConfig, HealthConfig, load_config
+from workspace_session_manager.config import (
+    AppConfig,
+    HealthConfig,
+    NotificationConfig,
+    load_config,
+)
 from workspace_session_manager.errors import ConfigurationError
 from workspace_session_manager.paths import AppPaths
 
@@ -101,3 +106,9 @@ def test_health_config_ttls_are_bounded() -> None:
         HealthConfig(disk_ttl_seconds=1.0)
     with pytest.raises(ValueError):
         HealthConfig(git_scan_budget=0)
+
+
+def test_notification_config_rejects_plaintext_telegram_api_base() -> None:
+    NotificationConfig(telegram_api_base="https://relay.example.com")
+    with pytest.raises(ValueError, match="https://"):
+        NotificationConfig(telegram_api_base="http://relay.example.com")

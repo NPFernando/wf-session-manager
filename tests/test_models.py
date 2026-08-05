@@ -3,7 +3,14 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from workspace_session_manager.models import InputState, SessionMetadata, TaskState, Tool
+from workspace_session_manager.models import (
+    CreateRequest,
+    InputState,
+    Preset,
+    SessionMetadata,
+    TaskState,
+    Tool,
+)
 from workspace_session_manager.security import bounded_output, bounded_preview, redact_text
 from workspace_session_manager.service import normalized_session_name, slugify_name
 
@@ -31,6 +38,16 @@ def test_metadata_rejects_relative_path_and_invalid_tag() -> None:
             cwd=Path("relative"),
             tags=["not valid"],
         )
+
+
+def test_create_request_rejects_relative_cwd() -> None:
+    with pytest.raises(ValidationError):
+        CreateRequest(name="claude-test", tool=Tool.CLAUDE, cwd=Path("relative"))
+
+
+def test_preset_rejects_relative_cwd() -> None:
+    with pytest.raises(ValidationError):
+        Preset(name="backend-dev", tool=Tool.CLAUDE, cwd=Path("relative"))
 
 
 def test_preview_is_sanitized_redacted_and_bounded() -> None:

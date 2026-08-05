@@ -121,6 +121,13 @@ class NotificationConfig(BaseModel):
     telegram_api_base: str = "https://api.telegram.org"
     subprocess_timeout: float = Field(default=5.0, ge=1.0, le=30.0)
 
+    @field_validator("telegram_api_base")
+    @classmethod
+    def https_only(cls, value: str) -> str:
+        if not value.startswith("https://"):
+            raise ValueError("telegram_api_base must use https:// (the bot token is in the URL)")
+        return value
+
 
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)

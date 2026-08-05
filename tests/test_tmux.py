@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from workspace_session_manager.errors import TmuxError
+from workspace_session_manager.errors import SessionExistsError, TmuxError
 from workspace_session_manager.tmux import FIELD_SEPARATOR, TMUX_FORMAT, TmuxBackend
 
 
@@ -189,6 +189,69 @@ def test_expected_id_mismatch_never_runs_final_tmux_command() -> None:
     with pytest.raises(TmuxError, match="expected tmux ID \\$original"):
         TmuxBackend(runner).kill_session("claude-api", expected_id="$original")
     assert runner.calls == [("tmux", "list-sessions", "-F", TMUX_FORMAT)]
+
+
+class DispatchRunner:
+    """Returns a different canned response depending on the tmux subcommand,
+    for tests where the pre-check call (list-sessions) must succeed while a
+    later call (new-session/rename-session) fails -- simulating a session
+    created by a concurrent caller in the window between the two."""
+
+    def __init__(self, responses: dict[str, subprocess.CompletedProcess[str]]) -> None:
+        self.responses = responses
+        self.calls: list[tuple[str, ...]] = []
+
+    def __call__(
+        self,
+        args: Sequence[str],
+        *,
+        capture: bool = True,
+        timeout: float | None = 5.0,
+    ) -> subprocess.CompletedProcess[str]:
+        del capture, timeout
+        self.calls.append(tuple(args))
+        subcommand = args[1]
+        return self.responses[subcommand]
+
+
+def test_create_session_translates_duplicate_race_to_session_exists_error(
+    tmp_path: Path,
+) -> None:
+    runner = DispatchRunner(
+        {
+            "list-sessions": subprocess.CompletedProcess(
+                args=(), returncode=1, stdout="", stderr="no server running"
+            ),
+            "new-session": subprocess.CompletedProcess(
+                args=(),
+                returncode=1,
+                stdout="",
+                stderr="duplicate session: claude-api",
+            ),
+        }
+    )
+    with pytest.raises(SessionExistsError, match="claude-api"):
+        TmuxBackend(runner).create_session(
+            "claude-api", tmp_path, ("/bin/bash", "-l"), None
+        )
+
+
+def test_rename_session_translates_duplicate_race_to_session_exists_error() -> None:
+    runner = DispatchRunner(
+        {
+            "list-sessions": subprocess.CompletedProcess(
+                args=(), returncode=0, stdout=f"{live_session_line()}\n", stderr=""
+            ),
+            "rename-session": subprocess.CompletedProcess(
+                args=(),
+                returncode=1,
+                stdout="",
+                stderr="duplicate session: claude-new",
+            ),
+        }
+    )
+    with pytest.raises(SessionExistsError, match="claude-new"):
+        TmuxBackend(runner).rename_session("claude-api", "claude-new", expected_id="$3")
 
 
 def test_interrupt_restart_and_logging_use_exact_pane_target(tmp_path: Path) -> None:
