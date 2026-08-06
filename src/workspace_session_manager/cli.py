@@ -3046,6 +3046,10 @@ def doctor(
 def health(
     context: typer.Context,
     as_json: Annotated[bool, typer.Option("--json")] = False,
+    fix: Annotated[
+        str | None,
+        typer.Option("--fix", help="Apply automatic remediation for one fixable check."),
+    ] = None,
     actionable: Annotated[
         bool,
         typer.Option(
@@ -3055,7 +3059,15 @@ def health(
     ] = False,
 ) -> None:
     """Check disk space, apt updates, reboot flag, dirty repos, and Docker."""
-    checks = runtime_from_context(context).service().refresh_health_alerts(force=True)
+    service = runtime_from_context(context).service()
+    if fix:
+        try:
+            checks = [service.apply_health_fix(fix)]
+        except WsError as error:
+            abort(error)
+            return
+    else:
+        checks = service.refresh_health_alerts(force=True)
     report = _redact_report(DoctorReport(checks=checks))
     if actionable:
         report = _actionable_report(report)

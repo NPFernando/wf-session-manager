@@ -4048,6 +4048,51 @@ class SessionService:
             results.append(check)
         return results
 
+    def apply_health_fix(self, name: str) -> HealthCheck:
+        specs = {spec.name: spec for spec in self._health_check_specs() if spec.enabled}
+        if name not in specs:
+            raise WsError(f"health check unknown or disabled: {name}")
+
+        checks = self.refresh_health_alerts(only=frozenset({name}), force=True)
+        if not checks:
+            raise WsError(f"health check unknown or disabled: {name}")
+        check = checks[0]
+        if not check.fixable:
+            raise WsError(f"health check has no automatic fix: {name}")
+        if check.status is HealthStatus.PASS:
+            raise WsError(f"health check has no automatic fix: {name}")
+
+        with self._guarded_action("health-fix"):
+            if name == "zombie-sessions":
+                for session_name in check.affected:
+                    record = self.store.load(session_name)
+                    if record is None:
+                        continue
+                    self.store.delete(session_name)
+                    with contextlib.suppress(StateError):
+                        self._delete_log_path(self._log_path(record))
+                self.append_audit("health.fix", f"{name} cleaned {len(check.affected)} session(s)")
+            elif name == "orphaned-logs":
+                logs_root = self.paths.logs_dir.resolve()
+                cleaned = 0
+                for raw_path in check.affected:
+                    candidate = Path(raw_path).expanduser()
+                    resolved = candidate.resolve(strict=False)
+                    if resolved.parent != logs_root or resolved.suffix != ".log":
+                        continue
+                    if not resolved.exists():
+                        continue
+                    self._delete_log_path(resolved)
+                    cleaned += 1
+                self.append_audit("health.fix", f"{name} cleaned {cleaned} log file(s)")
+            else:
+                raise WsError(f"health check has no automatic fix: {name}")
+
+        refreshed = self.refresh_health_alerts(only=frozenset({name}), force=True)
+        if not refreshed:
+            raise WsError(f"health check unknown or disabled: {name}")
+        return refreshed[0]
+
     def related_sessions_for_health_check(self, check: HealthCheck) -> list[str]:
         sessions = self.list_sessions()
         if check.name == "zombie-sessions":

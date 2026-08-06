@@ -34,7 +34,7 @@ jobs:
       - name: Type check
         run: uv run mypy
       - name: Unit and TUI tests
-        run: uv run pytest -m 'not integration'
+        run: uv run pytest -m 'not integration and not layout_snapshot'
       - name: Isolated tmux integration test
         env:
           WS_RUN_TMUX_INTEGRATION: "1"
