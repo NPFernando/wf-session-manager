@@ -42,6 +42,24 @@ jobs:
       - name: Secret and privacy scan
         run: scripts/secret-scan.sh
 
+  layout-snapshot-monitor:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Install project
+        run: uv sync --locked --extra dev
+      - name: Layout snapshot monitor
+        run: uv run pytest -m layout_snapshot -q --no-cov
+
   package:
     runs-on: ubuntu-latest
     steps:
