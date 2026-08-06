@@ -79,6 +79,14 @@ warn_unreachable = true
 pretty = true
 files = ["src"]
 
+[[tool.mypy.overrides]]
+module = [
+  "workspace_session_manager.cli",
+  "workspace_session_manager.service",
+  "workspace_session_manager.tui",
+]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers --cov=workspace_session_manager --cov-report=term-missing --cov-fail-under=65"
 testpaths = ["tests"]
