@@ -11,6 +11,10 @@ permissions:
   contents: read
   security-events: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   analyze:
     runs-on: ubuntu-latest
@@ -20,4 +24,3 @@ jobs:
         with:
           languages: python
       - uses: github/codeql-action/analyze@v4
-
