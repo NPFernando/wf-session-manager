@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 import os
 import stat
 import sys
@@ -68,11 +69,15 @@ def stream_to_log(path: Path) -> int:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.parent.chmod(0o700)
     descriptor = _open_log(path)
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     try:
         while chunk := sys.stdin.buffer.readline(MAX_INPUT_CHUNK):
-            clean = redact_text(chunk.decode("utf-8", errors="replace"))
+            clean = redact_text(decoder.decode(chunk))
             _write_all(descriptor, clean.encode("utf-8"))
             descriptor = _rotate(path, descriptor)
+        tail = redact_text(decoder.decode(b"", final=True))
+        if tail:
+            _write_all(descriptor, tail.encode("utf-8"))
     finally:
         os.close(descriptor)
     return 0
@@ -81,7 +86,11 @@ def stream_to_log(path: Path) -> int:
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit("usage: python -m workspace_session_manager.log_sink LOG_PATH")
-    raise SystemExit(stream_to_log(Path(sys.argv[1])))
+    try:
+        exit_code = stream_to_log(Path(sys.argv[1]))
+    except OSError as error:
+        raise SystemExit(f"log_sink: {error}") from error
+    raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":

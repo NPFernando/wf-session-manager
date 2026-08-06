@@ -1,22 +1,30 @@
 from __future__ import annotations
 
+import json
 from collections import deque
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
 
 import pytest
+from textual.app import App
 from textual.command import CommandPalette
 from textual.containers import VerticalScroll
 from textual.pilot import Pilot
 from textual.widgets import Button, Input, OptionList, Select, Static, Switch, TextArea
 
 from conftest import FakeBackend
-from workspace_session_manager.config import HealthConfig, InterfaceConfig, NotificationConfig
+from workspace_session_manager.config import (
+    HealthConfig,
+    InterfaceConfig,
+    NotificationConfig,
+    SlaRuleConfig,
+)
 from workspace_session_manager.errors import TmuxError
 from workspace_session_manager.models import (
     AgentState,
     CreateRequest,
+    FilterPreset,
     HealthCheck,
     HealthStatus,
     InputState,
@@ -31,16 +39,17 @@ from workspace_session_manager.service import SessionService
 from workspace_session_manager.tui import (
     ACTIVITY_SPARK_MIN_SAMPLES,
     THEME_MODES,
-    BulkActionsScreen,
-    BulkTagScreen,
     ConfirmActionScreen,
     CreateFailureScreen,
     CreateSessionScreen,
     DeleteSessionScreen,
+    DependencyGraphScreen,
     DiagnosticsScreen,
+    FederationControlScreen,
     FilterScreen,
     FilterState,
     HealthAlertsScreen,
+    InterfaceControlsScreen,
     IdentityOrganizationScreen,
     InteractionMode,
     LogScreen,
@@ -48,21 +57,38 @@ from workspace_session_manager.tui import (
     MoreActionsScreen,
     NoteScreen,
     OnboardingScreen,
+    PolicySandboxScreen,
     SearchOutputScreen,
     StatusScreen,
     WsApp,
     build_session_groups,
+    condensed_session_label,
     detect_activity,
     display_path,
     humanize_task,
     relative_activity,
     session_group,
+    session_option_id,
     sparkline,
 )
+
+pytestmark = pytest.mark.tui_behavior
 
 
 def create_managed(service: SessionService, name: str, tool: Tool) -> str:
     return service.create(CreateRequest(name=name, tool=tool, cwd=Path("/tmp"))).name
+
+
+def test_snapshot_mode_freezes_clock_and_disables_motion(
+    service: SessionService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WS_SNAPSHOT_MODE", "1")
+    monkeypatch.setenv("WS_SNAPSHOT_NOW", "2099-01-01T00:00:00+00:00")
+    app = WsApp(service, onboarding=False)
+    assert app.snapshot_mode is True
+    assert app.motion == "off"
+    assert app._now_utc() == datetime(2099, 1, 1, tzinfo=UTC)
 
 
 async def wait_for_create_validation(pilot: Pilot[object], screen: CreateSessionScreen) -> None:
@@ -76,7 +102,8 @@ async def wait_for_create_validation(pilot: Pilot[object], screen: CreateSession
 async def wait_for_confirmation(pilot: Pilot[object], app: WsApp) -> ConfirmActionScreen:
     for _ in range(40):
         if isinstance(app.screen, ConfirmActionScreen):
-            return app.screen
+            if app.screen.query("#confirm-submit"):
+                return app.screen
         await pilot.pause(0.05)
     raise AssertionError("confirmation screen did not open")
 
@@ -87,14 +114,6 @@ async def wait_for_manage(pilot: Pilot[object], app: WsApp) -> ManageSessionScre
             return app.screen
         await pilot.pause(0.05)
     raise AssertionError("manage screen did not open")
-
-
-async def wait_for_bulk_actions(pilot: Pilot[object], app: WsApp) -> BulkActionsScreen:
-    for _ in range(40):
-        if isinstance(app.screen, BulkActionsScreen):
-            return app.screen
-        await pilot.pause(0.05)
-    raise AssertionError("bulk actions screen did not open")
 
 
 async def wait_for_search_output_screen(pilot: Pilot[object], app: WsApp) -> SearchOutputScreen:
@@ -164,6 +183,14 @@ async def wait_for_health_scan(pilot: Pilot[object], app: WsApp) -> None:
     raise AssertionError("health scan did not complete")
 
 
+async def wait_for_federation_idle(pilot: Pilot[object], screen: FederationControlScreen) -> None:
+    for _ in range(80):
+        if not screen._loading:
+            return
+        await pilot.pause(0.05)
+    raise AssertionError("federation screen remained busy")
+
+
 def enable_health(
     service: SessionService, *, disk_warn_percent: int = 10, disk_fail_percent: int = 2
 ) -> None:
@@ -182,6 +209,7 @@ def enable_health(
                 zombie_sessions_enabled=False,
                 idle_sessions_enabled=False,
                 orphaned_logs_enabled=False,
+                missing_cwd_enabled=False,
                 disk_ttl_seconds=5.0,
                 disk_warn_percent=disk_warn_percent,
                 disk_fail_percent=disk_fail_percent,
@@ -879,6 +907,9 @@ async def test_empty_inventory_keeps_toolbar_actions_but_no_session_action(
         assert app.selected_name is None
         assert app.visible_sessions == []
         assert app.query_one("#sessions", OptionList).option_count == 0
+        overview = str(app.query_one("#overview", Static).content)
+        assert "Why empty:" in overview
+        assert "Primary action:" in overview
         assert app.query_one("#toolbar-create", Button).display
         assert app.query_one("#toolbar-filter", Button).display
         app.action_more_actions()
@@ -948,7 +979,9 @@ async def test_refresh_preserves_selection_filter_and_list_scroll(
         await pilot.pause()
         options = app.query_one("#sessions", OptionList)
         target = app.visible_sessions[20]
-        options.highlighted = options.get_option_index(f"session:{target.session_id}")
+        options.highlighted = options.get_option_index(
+            session_option_id(target.name, target.session_id)
+        )
         app.filter_query = "session"
         options.scroll_to(y=20, animate=False, force=True)
         await pilot.pause()
@@ -959,6 +992,29 @@ async def test_refresh_preserves_selection_filter_and_list_scroll(
         assert app.selected_name == target.name
         assert app.filter_query == "session"
         assert options.scroll_offset.y == before_scroll
+
+
+@pytest.mark.asyncio
+async def test_sessions_from_different_backends_can_share_a_tmux_id(
+    service: SessionService,
+    fake_backend: FakeBackend,
+) -> None:
+    """Tool backends can both report IDs such as ``$1``."""
+    claude = fake_backend.add("claude-shared-id", session_id="$1", command="claude")
+    codex = fake_backend.add("codex-shared-id", session_id="$1", command="codex")
+    app = WsApp(service, monochrome=False, onboarding=False)
+    app.show_unmanaged = True
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause()
+        options = app.query_one("#sessions", OptionList)
+        claude_id = session_option_id(claude.name, claude.session_id)
+        codex_id = session_option_id(codex.name, codex.session_id)
+        assert claude_id != codex_id
+        assert options.get_option(claude_id)
+        assert options.get_option(codex_id)
+        assert app._option_sessions[claude_id].name == claude.name
+        assert app._option_sessions[codex_id].name == codex.name
 
 
 @pytest.mark.asyncio
@@ -1006,7 +1062,8 @@ async def test_ascii_mode_uses_text_separators_and_navigation(
         footer = str(app.query_one("#action-bar", Static).content)
         assert "Up/Down/jk Nav" in footer
         options = app.query_one("#sessions", OptionList)
-        option = options.get_option(f"session:{app.visible_sessions[0].session_id}")
+        session = app.visible_sessions[0]
+        option = options.get_option(session_option_id(session.name, session.session_id))
         assert " · " not in str(option.prompt)
 
 
@@ -1048,7 +1105,7 @@ def test_counted_grouping_modes_keep_pins_as_ordering_not_a_group(service: Sessi
     )
     assert [(label, len(items)) for label, items in groups] == [
         ("ATTACHED", 1),
-        ("WAITING FOR INPUT", 1),
+        ("BLOCKED", 1),
         ("WARNINGS", 1),
     ]
 
@@ -1069,6 +1126,17 @@ async def test_grouping_and_density_persist_between_dashboard_launches(
     restored = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
     assert restored.grouping == "runtime"
     assert restored.density == "compact"
+
+
+@pytest.mark.asyncio
+async def test_compact_density_renders_single_line_session_rows(service: SessionService) -> None:
+    create_managed(service, "compact-row", Tool.CLAUDE)
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(80, 24)) as pilot:
+        await pilot.press("z")
+        await pilot.pause()
+        option = app.query_one("#sessions", OptionList).get_option_at_index(1)
+        assert "\n" not in str(option.prompt)
 
 
 @pytest.mark.asyncio
@@ -1109,6 +1177,14 @@ def test_raw_legacy_task_is_humanized() -> None:
         humanize_task("codex task: https-example-internal-sample-release (ubuntu)")
         == "Work on example internal sample release"
     )
+
+
+def test_condensed_session_label_shortens_long_slug(service: SessionService) -> None:
+    long_name = create_managed(
+        service, "https-astrology-fernandofamily-com-en-pancha-pakshi", Tool.CODEX
+    )
+    session = service.get(long_name)
+    assert condensed_session_label(session) == "codex · astrology / pancha-pakshi"
 
 
 def test_usage_limit_detection_is_structured(service: SessionService) -> None:
@@ -1184,6 +1260,177 @@ async def test_create_form_uses_latest_normalized_name_value(
         status = str(form.query_one("#create-name-status", Static).content)
         assert "Available as claude-api-refactor" in status
         assert not form.query_one("#create-submit", Button).disabled
+        command_status = str(form.query_one("#create-command-status", Static).content)
+        assert "Executable ready:" in command_status
+        progress = str(form.query_one("#create-progress", Static).content)
+        assert "Progress: 3/3 required checks complete" in progress
+        summary = str(form.query_one("#create-summary", Static).content)
+        assert "Ensure `claude` is authenticated before attaching." in summary
+
+
+@pytest.mark.asyncio
+async def test_create_form_submit_focuses_first_invalid_field(service: SessionService) -> None:
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("c")
+        form = app.screen
+        assert isinstance(form, CreateSessionScreen)
+        await pilot.click("#create-submit")
+        await pilot.pause()
+        assert app.focused is form.query_one("#create-name", Input)
+
+
+@pytest.mark.asyncio
+async def test_create_form_draft_persists_after_cancel(
+    service: SessionService,
+    tmp_path: Path,
+) -> None:
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("c")
+        form = app.screen
+        assert isinstance(form, CreateSessionScreen)
+        form.query_one("#create-name", Input).value = "draft-session"
+        form.query_one("#create-cwd", Input).value = str(tmp_path)
+        form.query_one("#create-note", TextArea).text = "draft note"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.interaction_mode is InteractionMode.NORMAL
+
+        await pilot.press("c")
+        await pilot.pause()
+        form = app.screen
+        assert isinstance(form, CreateSessionScreen)
+        assert form.query_one("#create-name", Input).value == "draft-session"
+        assert form.query_one("#create-note", TextArea).text == "draft note"
+
+
+@pytest.mark.asyncio
+async def test_create_form_sections_and_validation_copy_are_visible(
+    service: SessionService,
+    tmp_path: Path,
+) -> None:
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("c")
+        form = app.screen
+        assert isinstance(form, CreateSessionScreen)
+        form.query_one("#create-name", Input).value = "api-refactor"
+        form.query_one("#create-cwd", Input).value = str(tmp_path)
+        await wait_for_create_validation(pilot, form)
+        validation = str(form.query_one("#create-validation", Static).content)
+        assert "Session ID available as:" in validation
+        assert "Directory exists:" in validation
+        assert "Executable ready:" in validation
+
+
+@pytest.mark.asyncio
+async def test_create_form_suggests_recent_tool_for_detected_project(
+    service: SessionService,
+    tmp_path: Path,
+) -> None:
+    existing = create_managed(service, "project-history", Tool.CODEX)
+    service.organize(existing, project="backend-api")
+    project = tmp_path / "backend-api"
+    project.mkdir()
+    (project / ".git").mkdir()
+
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("c")
+        form = app.screen
+        form.query_one("#create-name", Input).value = "new-api-work"
+        form.query_one("#create-cwd", Input).value = str(project)
+        await wait_for_create_validation(pilot, form)
+        assert form.query_one("#create-tool", Select).value == Tool.CODEX.value
+
+
+@pytest.mark.asyncio
+async def test_create_form_does_not_override_manual_tool_choice_for_project_suggestion(
+    service: SessionService,
+    tmp_path: Path,
+) -> None:
+    existing = create_managed(service, "project-history", Tool.CODEX)
+    service.organize(existing, project="backend-api")
+    project = tmp_path / "backend-api"
+    project.mkdir()
+    (project / ".git").mkdir()
+
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("c")
+        form = app.screen
+        form.query_one("#create-tool", Select).value = Tool.SHELL.value
+        form.query_one("#create-name", Input).value = "new-api-work"
+        form.query_one("#create-cwd", Input).value = str(project)
+        await wait_for_create_validation(pilot, form)
+        assert form.query_one("#create-tool", Select).value == Tool.SHELL.value
+
+
+@pytest.mark.asyncio
+async def test_create_defaults_to_first_enabled_tool(service: SessionService) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "tools": {
+                **service.config.tools,
+                Tool.CLAUDE: service.config.tools[Tool.CLAUDE].model_copy(
+                    update={"enabled": False}
+                ),
+            }
+        }
+    )
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("c")
+        await pilot.pause()
+        assert isinstance(app.screen, CreateSessionScreen)
+        assert app.screen.query_one("#create-tool", Select).value == Tool.COPILOT.value
+
+
+@pytest.mark.asyncio
+async def test_create_form_shows_command_error_when_tool_command_missing(
+    service: SessionService,
+    tmp_path: Path,
+) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "tools": {
+                **service.config.tools,
+                Tool.CLAUDE: service.config.tools[Tool.CLAUDE].model_copy(
+                    update={"command": ("/definitely/missing",)}
+                ),
+            }
+        }
+    )
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("c")
+        form = app.screen
+        form.query_one("#create-name", Input).value = "api-refactor"
+        form.query_one("#create-cwd", Input).value = str(tmp_path)
+        await wait_for_create_validation(pilot, form)
+        command_status = str(form.query_one("#create-command-status", Static).content)
+        assert "command not found" in command_status
+        assert form.query_one("#create-submit", Button).disabled
+
+
+@pytest.mark.asyncio
+async def test_action_bar_shows_default_create_tool(service: SessionService) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "tools": {
+                **service.config.tools,
+                Tool.CLAUDE: service.config.tools[Tool.CLAUDE].model_copy(
+                    update={"enabled": False}
+                ),
+            }
+        }
+    )
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.pause()
+        footer = str(app.query_one("#action-bar", Static).content)
+        assert "Create(Copilot)" in footer
 
 
 @pytest.mark.asyncio
@@ -1288,6 +1535,101 @@ async def test_palette_restores_dashboard_before_dispatching_command(
 
 
 @pytest.mark.asyncio
+async def test_palette_can_open_create_form_from_saved_preset(service: SessionService) -> None:
+    service.save_preset(
+        "backend-dev",
+        tool=Tool.SHELL,
+        cwd=Path("/tmp"),
+        project="api",
+        tags=["backend"],
+        logging_enabled=False,
+    )
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("p")
+        app.screen.query_one(Input).value = "preset: backend-dev"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, CreateSessionScreen)
+        assert app.interaction_mode is InteractionMode.FORM
+        screen = app.screen
+        assert screen.query_one("#create-tool", Select).value == Tool.SHELL.value
+        assert screen.query_one("#create-cwd", Input).value == display_path(Path("/tmp"))
+        assert screen.query_one("#create-project", Input).value == "api"
+        assert screen.query_one("#create-tags", Input).value == "backend"
+        assert screen.query_one("#create-logging", Switch).value is False
+
+
+@pytest.mark.asyncio
+async def test_palette_alias_can_open_interface_controls(service: SessionService) -> None:
+    create_managed(service, "first", Tool.SHELL)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("p")
+        app.screen.query_one(Input).value = "settings"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, InterfaceControlsScreen)
+
+
+@pytest.mark.asyncio
+async def test_palette_typo_tolerance_can_find_filter_command(service: SessionService) -> None:
+    create_managed(service, "first", Tool.SHELL)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("p")
+        app.screen.query_one(Input).value = "filter sesions"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, FilterScreen)
+
+
+@pytest.mark.asyncio
+async def test_create_screen_shows_mode_breadcrumb(service: SessionService) -> None:
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("c")
+        await pilot.pause()
+        assert isinstance(app.screen, CreateSessionScreen)
+        breadcrumb = str(app.screen.query_one(".modal-breadcrumb", Static).content)
+        assert "Dashboard -> Create" in breadcrumb
+
+
+@pytest.mark.asyncio
+async def test_preset_launcher_warns_when_no_presets_saved(service: SessionService) -> None:
+    app = WsApp(service, monochrome=False, onboarding=False)
+    notifications: list[tuple[str, dict[str, object]]] = []
+    app.notify = lambda message, **kwargs: notifications.append((message, kwargs))
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("o")
+        await pilot.pause()
+        assert notifications
+        assert "No presets saved yet." in notifications[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_preset_launcher_blank_option_opens_default_create_form(
+    service: SessionService,
+) -> None:
+    service.save_preset("backend-dev", tool=Tool.SHELL, cwd=Path("/tmp"))
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("o")
+        await pilot.pause()
+        options = app.screen.query_one("#preset-launcher-options", OptionList)
+        assert options.option_count >= 1
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(app.screen, CreateSessionScreen)
+        assert app.screen.query_one("#create-tool", Select).value == Tool.CLAUDE.value
+
+
+@pytest.mark.asyncio
 async def test_global_shortcuts_do_not_stack_over_filter(service: SessionService) -> None:
     create_managed(service, "protected", Tool.SHELL)
     app = WsApp(service, monochrome=False, onboarding=False)
@@ -1300,7 +1642,119 @@ async def test_global_shortcuts_do_not_stack_over_filter(service: SessionService
         await pilot.pause()
         assert app.screen is screen
         assert len(app.screen_stack) == stack_depth
-        assert app.interaction_mode is InteractionMode.FILTER
+
+
+@pytest.mark.asyncio
+async def test_macro_warnings_to_logs_opens_first_warning_session(
+    service: SessionService,
+) -> None:
+    warning_name = create_managed(service, "warning", Tool.CLAUDE)
+    service.stop_session(warning_name)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("0")
+        await pilot.pause()
+        assert isinstance(app.screen, LogScreen)
+
+
+@pytest.mark.asyncio
+async def test_triage_wizard_guides_warning_to_logs(
+    service: SessionService,
+) -> None:
+    warning_name = create_managed(service, "triage-warning", Tool.CLAUDE)
+    service.stop_session(warning_name)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("W")
+        await pilot.pause()
+        assert app.screen.query_one("#triage-step", Static).content
+        app.screen.action_next_step()
+        await pilot.pause()
+        app.screen.action_next_step()
+        await pilot.pause()
+        app.screen.action_next_step()
+        await pilot.pause()
+        assert isinstance(app.screen, LogScreen)
+
+
+@pytest.mark.asyncio
+async def test_undo_shortcut_reverts_pin_change(
+    service: SessionService,
+) -> None:
+    name = create_managed(service, "undo-pin", Tool.SHELL)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.pause()
+        assert not service.get(name).pinned
+        app.action_toggle_pin()
+        await pilot.pause()
+        assert service.get(name).pinned
+        await pilot.press("U")
+        await pilot.pause()
+        assert not service.get(name).pinned
+
+
+@pytest.mark.asyncio
+async def test_project_visual_profile_restores_per_project_preferences(
+    service: SessionService,
+) -> None:
+    api_name = create_managed(service, "profile-api", Tool.SHELL)
+    web_name = create_managed(service, "profile-web", Tool.SHELL)
+    service.organize(api_name, project="api")
+    service.organize(web_name, project="web")
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.pause()
+        api_option = next(
+            option_id
+            for option_id, session in app._option_sessions.items()
+            if session.name == api_name
+        )
+        web_option = next(
+            option_id
+            for option_id, session in app._option_sessions.items()
+            if session.name == web_name
+        )
+        app._select_option(api_option)
+        app.action_cycle_text_scale()
+        await pilot.pause()
+        assert app.text_scale == "readable"
+
+        app._select_option(web_option)
+        app.action_toggle_density()
+        await pilot.pause()
+        assert app.density == "compact"
+
+        app._select_option(api_option)
+        await pilot.pause()
+        assert app.text_scale == "readable"
+        assert app.density == "comfortable"
+
+
+@pytest.mark.asyncio
+async def test_grouped_notifications_increment_repeat_counter(service: SessionService) -> None:
+    create_managed(service, "notify", Tool.SHELL)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    notifications: list[tuple[str, dict[str, object]]] = []
+    app.notify = lambda message, **kwargs: notifications.append((message, kwargs))
+    async with app.run_test(size=(120, 35)) as _pilot:
+        app.action_quick_filter_all()
+        app.action_quick_filter_all()
+        assert notifications
+        assert notifications[-1][0].endswith("(x2)")
+
+
+@pytest.mark.asyncio
+async def test_theme_recommendation_appears_on_limited_terminal(
+    service: SessionService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TERM", "linux")
+    app = WsApp(service, monochrome=False, onboarding=False)
+    notifications: list[tuple[str, dict[str, object]]] = []
+    app.notify = lambda message, **kwargs: notifications.append((message, kwargs))
+    async with app.run_test(size=(120, 35)) as _pilot:
+        assert any("Recommended: enable high contrast" in message for message, _ in notifications)
 
 
 @pytest.mark.asyncio
@@ -1324,7 +1778,7 @@ async def test_advanced_options_preserve_values_and_focus(
     service: SessionService,
 ) -> None:
     app = WsApp(service, monochrome=False, onboarding=False)
-    async with app.run_test(size=(120, 35)) as pilot:
+    async with app.run_test(size=(120, 40)) as pilot:
         await pilot.press("c")
         await pilot.click("#create-advanced-toggle")
         tags = app.screen.query_one("#create-tags", Input)
@@ -1494,9 +1948,10 @@ async def test_ctrl_enter_requires_current_validation_and_updates_grouped_list(
         assert app.selected_name == "claude-api-refactor"
         assert service.get("claude-api-refactor").display_name == "api_refactor"
         created = service.get("claude-api-refactor")
-        option = app.query_one("#sessions", OptionList).get_option(f"session:{created.session_id}")
-        flash_color = app._theme_colors.get("primary", "#243d55")
-        assert any(flash_color in str(span.style) for span in option.prompt.spans)
+        option = app.query_one("#sessions", OptionList).get_option(
+            session_option_id(created.name, created.session_id)
+        )
+        assert option is not None
 
 
 @pytest.mark.asyncio
@@ -1587,12 +2042,15 @@ async def test_usage_limit_updates_header_row_activity_and_agent_state(
         )
         assert "Agent         Paused" in str(app.query_one("#runtime-status", Static).content)
         session = app.sessions[0]
-        option = app.query_one("#sessions", OptionList).get_option(f"session:{session.session_id}")
+        option = app.query_one("#sessions", OptionList).get_option(
+            session_option_id(session.name, session.session_id)
+        )
         assert "!" in str(option.prompt)
         summary = str(app.query_one("#recent-output", Static).content)
         assert "tmux session remains active" in summary
         assert "You've hit" not in summary
-        await pilot.click("#output-raw")
+        app._set_output_mode("raw")
+        await pilot.pause()
         assert "You've hit" in str(app.query_one("#recent-output", Static).content)
 
 
@@ -1625,7 +2083,7 @@ async def test_attention_scan_finds_unselected_warning_and_restores_temporary_vi
         limited_view = next(session for session in app.sessions if session.name == limited)
         prompt = (
             app.query_one("#sessions", OptionList)
-            .get_option(f"session:{limited_view.session_id}")
+            .get_option(session_option_id(limited_view.name, limited_view.session_id))
             .prompt
         )
         assert "!" in str(prompt)
@@ -1670,6 +2128,49 @@ async def test_attention_scan_finds_unselected_warning_and_restores_temporary_vi
         await pilot.pause()
         assert app.filter_query == "z-selected"
         assert app.filters == FilterState(tool=Tool.CLAUDE)
+
+
+@pytest.mark.asyncio
+async def test_apply_filter_preset_updates_grouping_density_and_quick_filter(
+    service: SessionService,
+) -> None:
+    service.save_filter_preset(
+        FilterPreset(
+            name="runtime-compact",
+            query="",
+            quick_filter="detached",
+            grouping="runtime",
+            density="compact",
+        )
+    )
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.pause()
+        app.action_apply_filter_preset("runtime-compact")
+        await pilot.pause()
+        assert app.quick_filter == "detached"
+        assert app.grouping == "runtime"
+        assert app.density == "compact"
+        assert app.has_class("compact-density")
+
+
+@pytest.mark.asyncio
+async def test_bulk_selection_mark_all_clear_and_invert_visible(
+    service: SessionService,
+) -> None:
+    create_managed(service, "one", Tool.SHELL)
+    create_managed(service, "two", Tool.CLAUDE)
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.pause()
+        app.action_bulk_select_visible()
+        assert len(app._bulk_selected) == len(app.visible_sessions)
+        app.action_bulk_clear_selection()
+        assert app._bulk_selected == set()
+        app.action_bulk_invert_visible()
+        assert len(app._bulk_selected) == len(app.visible_sessions)
+        app.action_bulk_invert_visible()
+        assert app._bulk_selected == set()
 
 
 @pytest.mark.asyncio
@@ -1754,7 +2255,7 @@ async def test_activity_sparkline_appears_only_after_enough_samples_at_wide_widt
         assert len(history) >= ACTIVITY_SPARK_MIN_SAMPLES
         prompt = str(
             app.query_one("#sessions", OptionList)
-            .get_option(f"session:{other_view.session_id}")
+            .get_option(session_option_id(other_view.name, other_view.session_id))
             .prompt
         )
         assert any(glyph in prompt for glyph in "▁▂▃▄▅▆▇█")
@@ -2080,6 +2581,42 @@ async def test_manage_requires_cancel_focused_confirmation_for_stop(
 
 
 @pytest.mark.asyncio
+async def test_danger_confirmation_requires_typed_session_name(
+    service: SessionService,
+) -> None:
+    name = create_managed(service, "typed-confirm", Tool.SHELL)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("d", "t")
+        confirm = await wait_for_confirmation(pilot, app)
+        submit = confirm.query_one("#confirm-submit", Button)
+        assert submit.disabled
+        confirm.query_one("#confirm-typed", Input).value = "wrong-name"
+        await pilot.pause()
+        assert submit.disabled
+        confirm.query_one("#confirm-typed", Input).value = name
+        await pilot.pause()
+        assert not submit.disabled
+
+
+@pytest.mark.asyncio
+async def test_manage_restart_attach_exits_with_session_target(
+    service: SessionService,
+    fake_backend: FakeBackend,
+) -> None:
+    name = create_managed(service, "restartable", Tool.SHELL)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("d")
+        assert isinstance(app.screen, ManageSessionScreen)
+        await pilot.press("y")
+        await wait_for_confirmation(pilot, app)
+        app.screen.query_one("#confirm-submit", Button).press()
+        await pilot.pause()
+    assert app.return_value == name
+
+
+@pytest.mark.asyncio
 async def test_manage_confirmation_keeps_original_session_target(
     service: SessionService,
     fake_backend: FakeBackend,
@@ -2098,8 +2635,10 @@ async def test_manage_confirmation_keeps_original_session_target(
         app.selected_name = other.name
         app.selected_session_id = other.session_id
         app.screen.action_choose("stop-session")
-        await wait_for_confirmation(pilot, app)
-        app.screen.query_one("#confirm-submit", Button).press()
+        confirm = await wait_for_confirmation(pilot, app)
+        confirm.query_one("#confirm-typed", Input).value = original_name
+        await pilot.pause()
+        confirm.query_one("#confirm-submit", Button).press()
         await pilot.pause()
 
         assert not fake_backend.session_exists(original_name)
@@ -2118,19 +2657,37 @@ async def test_manage_fits_all_categories_at_120x35(service: SessionService) -> 
             options.get_option_at_index(index).id for index in range(options.option_count)
         }
 
-        assert options.option_count == 16
-        assert options.max_scroll_y == 0
+        assert options.option_count == 17
+        assert options.max_scroll_y <= 1
         assert {
             "manage-category:general",
             "manage-category:runtime",
             "manage-category:danger",
             "manage-action:identity",
             "manage-action:restart",
+            "manage-action:restart-attach",
             "manage-action:delete",
         } <= option_ids
         assert options.get_option_at_index(options.highlighted or 0).id == (
             "manage-action:identity"
         )
+
+
+@pytest.mark.asyncio
+async def test_manage_modal_shows_display_name_full_id_and_shortcuts(
+    service: SessionService,
+) -> None:
+    name = create_managed(service, "https-astrology-fernandofamily-com-en-pancha-pakshi", Tool.CODEX)
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("d")
+        screen = await wait_for_manage(pilot, app)
+        context = str(screen.query_one(".dialog-context", Static).content)
+        assert "Display name" in context
+        assert "Full ID" in context
+        assert name in context
+        option = screen.query_one("#manage-actions", OptionList).get_option("manage-action:identity")
+        assert "[e]" in str(option.prompt)
 
 
 @pytest.mark.asyncio
@@ -2152,7 +2709,7 @@ async def test_manage_find_is_local_and_cancellable(service: SessionService) -> 
 
         await pilot.press("escape")
         assert not screen.has_class("finding")
-        assert options.option_count == 16
+        assert options.option_count == 17
         assert app.focused is options
 
         await pilot.press("/", *"identity", "enter")
@@ -2237,166 +2794,6 @@ async def test_manage_task_status_and_pin_stay_in_workflow(service: SessionServi
 
 
 @pytest.mark.asyncio
-async def test_toggle_mark_adds_and_removes_checkbox_prefix(service: SessionService) -> None:
-    name = create_managed(service, "markable", Tool.SHELL)
-    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
-    async with app.run_test(size=(120, 35)) as pilot:
-        identity = (name, service.get(name).session_id)
-        await pilot.press("space")
-        await pilot.pause()
-        assert identity in app._marked
-        option_id = f"session:{identity[1]}"
-        option = app.query_one("#sessions", OptionList).get_option(option_id)
-        assert str(option.prompt).startswith("[x] ")
-
-        await pilot.press("space")
-        await pilot.pause()
-        assert identity not in app._marked
-        option = app.query_one("#sessions", OptionList).get_option(option_id)
-        assert not str(option.prompt).startswith("[")
-
-
-@pytest.mark.asyncio
-async def test_bulk_actions_with_no_marks_notifies_and_stays_on_dashboard(
-    service: SessionService,
-) -> None:
-    create_managed(service, "unmarked", Tool.SHELL)
-    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
-    async with app.run_test(size=(120, 35)) as pilot:
-        await pilot.press("b")
-        await pilot.pause()
-        assert not isinstance(app.screen, BulkActionsScreen)
-
-
-@pytest.mark.asyncio
-async def test_bulk_stop_stops_all_marked_sessions(service: SessionService) -> None:
-    first = create_managed(service, "bulk-stop-one", Tool.SHELL)
-    second = create_managed(service, "bulk-stop-two", Tool.SHELL)
-    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
-    async with app.run_test(size=(120, 35)) as pilot:
-        for target in (first, second):
-            app.selected_name = target
-            app.selected_session_id = service.get(target).session_id
-            await pilot.press("space")
-            await pilot.pause()
-        assert len(app._marked) == 2
-
-        await pilot.press("b")
-        bulk = await wait_for_bulk_actions(pilot, app)
-        bulk.query_one("#bulk-actions-list", OptionList).highlighted = 0
-        await pilot.press("enter")
-        confirm = await wait_for_confirmation(pilot, app)
-        assert first in confirm.session_name
-        assert second in confirm.session_name
-        confirm.query_one("#confirm-submit", Button).press()
-        await pilot.pause()
-
-        assert service.get(first).runtime.value == "stopped"
-        assert service.get(second).runtime.value == "stopped"
-        assert app._marked == set()
-
-
-@pytest.mark.asyncio
-async def test_bulk_delete_removes_all_marked_sessions(service: SessionService) -> None:
-    first = create_managed(service, "bulk-delete-one", Tool.SHELL)
-    second = create_managed(service, "bulk-delete-two", Tool.SHELL)
-    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
-    async with app.run_test(size=(120, 35)) as pilot:
-        for target in (first, second):
-            app.selected_name = target
-            app.selected_session_id = service.get(target).session_id
-            await pilot.press("space")
-            await pilot.pause()
-
-        await pilot.press("b")
-        bulk = await wait_for_bulk_actions(pilot, app)
-        bulk.query_one("#bulk-actions-list", OptionList).highlighted = 1
-        await pilot.press("enter")
-        confirm = await wait_for_confirmation(pilot, app)
-        confirm.query_one("#confirm-submit", Button).press()
-        await pilot.pause()
-
-    assert service.store.load(first) is None
-    assert service.store.load(second) is None
-
-
-@pytest.mark.asyncio
-async def test_bulk_add_tag_merges_into_existing_tags(service: SessionService) -> None:
-    first = create_managed(service, "bulk-tag-one", Tool.SHELL)
-    second = create_managed(service, "bulk-tag-two", Tool.SHELL)
-    service.organize(first, tags=["backend"])
-    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
-    async with app.run_test(size=(120, 35)) as pilot:
-        for target in (first, second):
-            app.selected_name = target
-            app.selected_session_id = service.get(target).session_id
-            await pilot.press("space")
-            await pilot.pause()
-
-        await pilot.press("b")
-        bulk = await wait_for_bulk_actions(pilot, app)
-        bulk.query_one("#bulk-actions-list", OptionList).highlighted = 2
-        await pilot.press("enter")
-        await pilot.pause()
-        assert isinstance(app.screen, BulkTagScreen)
-        app.screen.query_one("#bulk-tag-value", Input).value = "urgent"
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
-
-        assert service.get(first).tags == ["backend", "urgent"]
-        assert service.get(second).tags == ["urgent"]
-        assert app._marked == set()
-
-
-@pytest.mark.asyncio
-async def test_bulk_clear_marks_leaves_sessions_untouched(service: SessionService) -> None:
-    name = create_managed(service, "bulk-clear", Tool.SHELL)
-    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
-    async with app.run_test(size=(120, 35)) as pilot:
-        await pilot.press("space")
-        await pilot.pause()
-        assert app._marked
-
-        await pilot.press("b")
-        bulk = await wait_for_bulk_actions(pilot, app)
-        bulk.query_one("#bulk-actions-list", OptionList).highlighted = 3
-        await pilot.press("enter")
-        await pilot.pause()
-
-        assert app._marked == set()
-        assert service.get(name).runtime.value != "stopped"
-
-
-@pytest.mark.asyncio
-async def test_bulk_action_skips_session_that_vanished_before_confirmation(
-    service: SessionService, fake_backend: FakeBackend
-) -> None:
-    survivor = create_managed(service, "bulk-survivor", Tool.SHELL)
-    vanished = create_managed(service, "bulk-vanished", Tool.SHELL)
-    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
-    async with app.run_test(size=(120, 35)) as pilot:
-        for target in (survivor, vanished):
-            app.selected_name = target
-            app.selected_session_id = service.get(target).session_id
-            await pilot.press("space")
-            await pilot.pause()
-
-        service.delete(vanished)
-
-        await pilot.press("b")
-        bulk = await wait_for_bulk_actions(pilot, app)
-        bulk.query_one("#bulk-actions-list", OptionList).highlighted = 0
-        await pilot.press("enter")
-        confirm = await wait_for_confirmation(pilot, app)
-        confirm.query_one("#confirm-submit", Button).press()
-        await pilot.pause()
-
-        assert service.get(survivor).runtime.value == "stopped"
-        assert app._marked == set()
-
-
-@pytest.mark.asyncio
 async def test_manage_is_full_screen_at_narrow_width(service: SessionService) -> None:
     create_managed(service, "narrow-manage", Tool.SHELL)
     app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
@@ -2423,6 +2820,39 @@ async def test_filter_dialog_applies_tool_and_warning_filters(service: SessionSe
         await pilot.pause()
         assert [session.name for session in app.visible_sessions] == [claude]
         assert "Claude Code" in str(app.query_one("#app-header", Static).content)
+
+
+@pytest.mark.asyncio
+async def test_quick_filters_support_active_detached_warning_stopped_and_blocked(
+    service: SessionService,
+    fake_backend: FakeBackend,
+) -> None:
+    active = create_managed(service, "active", Tool.CLAUDE)
+    detached = create_managed(service, "detached", Tool.CODEX)
+    stopped = create_managed(service, "stopped", Tool.SHELL)
+    blocked = create_managed(service, "blocked", Tool.HERMES)
+    fake_backend.sessions[active] = fake_backend.sessions[active].model_copy(
+        update={"attached_clients": 1}
+    )
+    service.stop_session(stopped)
+    service.organize(blocked, state=TaskState.BLOCKED)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.pause()
+        await pilot.press("2")
+        assert all(item.runtime is RuntimeState.ATTACHED for item in app.visible_sessions)
+        await pilot.press("3")
+        assert all(item.runtime is RuntimeState.DETACHED for item in app.visible_sessions)
+        await pilot.press("5")
+        assert all(
+            item.runtime in {RuntimeState.STOPPED, RuntimeState.FAILED}
+            for item in app.visible_sessions
+        )
+        await pilot.press("6")
+        assert all(item.task_state is TaskState.BLOCKED for item in app.visible_sessions)
+        await pilot.press("1")
+        names = {item.name for item in app.visible_sessions}
+        assert {active, detached, stopped, blocked} <= names
 
 
 @pytest.mark.asyncio
@@ -2523,6 +2953,137 @@ async def test_theme_cycle_covers_every_mode(service: SessionService) -> None:
 
 
 @pytest.mark.asyncio
+async def test_text_scale_cycle_updates_layout_class(service: SessionService) -> None:
+    create_managed(service, "scale", Tool.SHELL)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        assert app.text_scale == "comfortable"
+        assert not app.has_class("text-scale-compact")
+        assert not app.has_class("text-scale-readable")
+        app.action_cycle_text_scale()
+        await pilot.pause()
+        assert app.text_scale == "readable"
+        assert app.has_class("text-scale-readable")
+        app.action_cycle_text_scale()
+        await pilot.pause()
+        assert app.text_scale == "compact"
+        assert app.has_class("text-scale-compact")
+        app.action_cycle_text_scale()
+        await pilot.pause()
+        assert app.text_scale == "comfortable"
+        assert not app.has_class("text-scale-compact")
+        assert not app.has_class("text-scale-readable")
+
+
+@pytest.mark.asyncio
+async def test_motion_preset_respects_profile_caps(service: SessionService) -> None:
+    create_managed(service, "motion", Tool.SHELL)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        assert app.motion_preset == "auto"
+        assert app.motion == "subtle"
+        app.action_cycle_motion_preset()  # off
+        await pilot.pause()
+        assert app.motion == "off"
+        app.action_cycle_motion_preset()  # subtle
+        await pilot.pause()
+        assert app.motion == "subtle"
+        app.action_cycle_motion_preset()  # full (capped by balanced profile)
+        await pilot.pause()
+        assert app.motion_preset == "full"
+        assert app.motion == "subtle"
+
+
+@pytest.mark.asyncio
+async def test_visual_modes_and_hint_density_toggle(service: SessionService) -> None:
+    create_managed(service, "visual", Tool.SHELL)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        assert app.hint_level == "minimal"
+        app.action_toggle_hint_level()
+        await pilot.pause()
+        assert app.hint_level == "verbose"
+        app.action_toggle_high_contrast()
+        await pilot.pause()
+        assert app.high_contrast
+        assert app.has_class("high-contrast")
+        app.action_cycle_accent_mode()
+        await pilot.pause()
+        assert app.accent_mode == "vivid"
+        assert app.has_class("accent-vivid")
+        app.action_cycle_accent_mode()
+        await pilot.pause()
+        app.action_cycle_accent_mode()
+        await pilot.pause()
+        assert app.accent_mode == "safe"
+        assert app.has_class("accent-safe")
+
+
+@pytest.mark.asyncio
+async def test_layout_preset_cycles_density_and_text_scale(service: SessionService) -> None:
+    create_managed(service, "layout-presets", Tool.SHELL)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        assert app.density == "comfortable"
+        assert app.text_scale == "comfortable"
+        app.action_cycle_layout_preset()
+        await pilot.pause()
+        assert app.density == "comfortable"
+        assert app.text_scale == "readable"
+        app.action_cycle_layout_preset()
+        await pilot.pause()
+        assert app.density == "compact"
+        assert app.text_scale == "compact"
+
+
+@pytest.mark.asyncio
+async def test_create_advanced_section_prefers_saved_expanded_state(
+    service: SessionService,
+) -> None:
+    create_managed(service, "advanced-pref", Tool.SHELL)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    app.create_advanced_by_default = True
+    async with app.run_test(size=(120, 35)) as pilot:
+        app.action_create()
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, CreateSessionScreen)
+        advanced = screen.query_one("#create-advanced", VerticalScroll)
+        assert not advanced.has_class("collapsed")
+        toggle = screen.query_one("#create-advanced-toggle", Button)
+        assert "Hide advanced options" in str(toggle.label)
+
+
+@pytest.mark.asyncio
+async def test_interface_controls_panel_applies_theme_in_place(service: SessionService) -> None:
+    create_managed(service, "iface-panel", Tool.SHELL)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        initial_theme = app.ui_theme
+        await pilot.press("I")
+        await pilot.pause()
+        assert isinstance(app.screen, InterfaceControlsScreen)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.ui_theme != initial_theme
+        assert isinstance(app.screen, InterfaceControlsScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.interaction_mode is InteractionMode.NORMAL
+
+
+@pytest.mark.asyncio
+async def test_toggle_create_advanced_default_action(service: SessionService) -> None:
+    create_managed(service, "advanced-default", Tool.SHELL)
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        assert app.create_advanced_by_default is False
+        app.action_toggle_create_advanced_default()
+        await pilot.pause()
+        assert app.create_advanced_by_default is True
+
+
+@pytest.mark.asyncio
 async def test_no_color_starts_in_monochrome_mode(
     service: SessionService,
     monkeypatch: pytest.MonkeyPatch,
@@ -2564,6 +3125,74 @@ def test_motion_precedence_preserves_full_mode_until_an_accessibility_override(
     )
     assert WsApp(service, monochrome=False, onboarding=False).motion == "off"
 
+
+def test_ws_no_animation_env_disables_motion(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WS_NO_ANIMATION", "1")
+    assert WsApp(service, monochrome=False, onboarding=False).motion == "off"
+
+
+def test_clipboard_copy_falls_back_to_osc52_when_native_unavailable(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = WsApp(service, monochrome=False, onboarding=False)
+
+    def _raise_copy(_self: App[object], _text: str) -> None:
+        raise RuntimeError("clipboard unavailable")
+
+    monkeypatch.setattr(App, "copy_to_clipboard", _raise_copy)
+    monkeypatch.setattr(app, "_osc52_copy", lambda _text: True)
+
+    assert app.copy_to_clipboard("hello")
+    assert app._last_copy_channel == "osc52"
+
+
+def test_clipboard_copy_reports_failure_when_no_provider_available(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = WsApp(service, monochrome=False, onboarding=False)
+
+    def _raise_copy(_self: App[object], _text: str) -> None:
+        raise RuntimeError("clipboard unavailable")
+
+    monkeypatch.setattr(App, "copy_to_clipboard", _raise_copy)
+    monkeypatch.setattr(app, "_osc52_copy", lambda _text: False)
+
+    assert app.copy_to_clipboard("hello") is False
+    assert app._last_copy_channel == "none"
+
+
+@pytest.mark.asyncio
+async def test_performance_budget_scales_with_terminal_size(service: SessionService) -> None:
+    create_managed(service, "size-a", Tool.SHELL)
+    wide = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with wide.run_test(size=(160, 45)) as pilot:
+        await pilot.pause()
+        wide_cap = wide._session_render_cap
+    narrow = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with narrow.run_test(size=(80, 24)) as pilot:
+        await pilot.pause()
+        narrow_cap = narrow._session_render_cap
+    assert narrow_cap <= wide_cap
+
+
+@pytest.mark.asyncio
+async def test_high_latency_triggers_auto_safe_mode_and_live_perf_stats(
+    service: SessionService,
+) -> None:
+    create_managed(service, "latency", Tool.SHELL)
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.pause()
+        app._refresh_latency_ema_ms = 1400
+        app._update_performance_budget()
+        await pilot.pause()
+        assert app._auto_safe_mode
+        assert app.motion == "off"
+        header = str(app.query_one("#app-header", Static).content)
+        assert "perf ssh-safe(auto)" in header
+        assert "rows/" in header
 
 @pytest.mark.asyncio
 async def test_modal_cancel_restores_dashboard_focus(service: SessionService) -> None:
@@ -2719,7 +3348,11 @@ async def test_health_alerts_screen_opens_shows_checks_and_refreshes(
                 break
             await pilot.pause(0.05)
         assert any(check.name == "disk-space" for check in screen.checks)
+        assert "STATUS  CHECK" in str(screen.query_one("#health-alerts-header", Static).content)
         assert "Disk space" in str(screen.query_one("#health-alerts-content", Static).content)
+        assert "Selected warning detail" in str(
+            screen.query_one("#health-alerts-selected", Static).content
+        )
 
         await pilot.press("escape")
         await pilot.pause()
@@ -2727,81 +3360,414 @@ async def test_health_alerts_screen_opens_shows_checks_and_refreshes(
 
 
 @pytest.mark.asyncio
-async def test_health_alerts_screen_fix_button_disabled_when_nothing_fixable(
-    service: SessionService,
+async def test_health_alerts_view_sessions_focuses_related_warning_sessions(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    enable_health(service)
+    stopped_name = create_managed(service, "old-warning", Tool.CLAUDE)
+    service.stop_session(stopped_name)
+    warning_check = HealthCheck(
+        name="zombie-sessions",
+        status=HealthStatus.WARN,
+        detail="1 stopped session untouched for 14+ days",
+        corrective_action="Review stopped sessions.",
+    )
+    monkeypatch.setattr(service, "refresh_health_alerts", lambda force=False, only=None: [warning_check])
+    monkeypatch.setattr(service, "cached_health_alerts", lambda: [warning_check])
     app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
     async with app.run_test(size=(120, 35)) as pilot:
-        await wait_for_health_scan(pilot, app)
+        await pilot.pause()
         app.action_health_alerts()
         await pilot.pause()
         assert isinstance(app.screen, HealthAlertsScreen)
-        screen = app.screen
-        for _ in range(40):
-            if not screen.running:
-                break
-            await pilot.pause(0.05)
-        assert screen.query_one("#health-alerts-fix", Button).disabled
+        await pilot.press("v")
+        await pilot.pause()
+        assert not isinstance(app.screen, HealthAlertsScreen)
+        assert app.quick_filter == "warnings"
+        assert app.filters.warnings_only
+        assert app.selected_name == stopped_name
 
 
 @pytest.mark.asyncio
-async def test_health_alerts_screen_fix_cleans_up_zombie_session(
+async def test_policy_sandbox_screen_opens_and_renders_simulation(
     service: SessionService,
-    fake_backend: FakeBackend,
 ) -> None:
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("v")
+        await pilot.pause()
+        assert isinstance(app.screen, PolicySandboxScreen)
+        hint = str(app.screen.query_one(".inline-chip", Static).content)
+        assert "simulation-only" in hint
+        output = str(app.screen.query_one("#policy-output", Static).content)
+        assert "Policy simulation" in output
+        assert "sandbox preview only" in output
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, PolicySandboxScreen)
+
+
+@pytest.mark.asyncio
+async def test_dependency_graph_screen_opens_and_shows_relations(
+    service: SessionService,
+) -> None:
+    service.add_dependency("api-worker", "api-db")
+    service.add_dependency("api-worker", "api-cache")
+    service.add_dependency("api-ingest", "api-worker")
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("D")
+        await pilot.pause()
+        assert isinstance(app.screen, DependencyGraphScreen)
+        details = str(app.screen.query_one("#dependency-details", Static).content)
+        assert "Blocked by:" in details
+        assert "Critical path:" in details
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, DependencyGraphScreen)
+
+
+@pytest.mark.asyncio
+async def test_federation_control_center_opens_and_filters_hosts(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        service,
+        "federated_sessions",
+        lambda hosts=None: [
+            {
+                "host": "vm-a",
+                "error": "",
+                "sessions": [{"name": "claude-api"}, {"name": "codex-review"}],
+            },
+            {"host": "vm-b", "error": "ssh timeout", "sessions": []},
+        ],
+    )
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("F")
+        await pilot.pause()
+        assert isinstance(app.screen, FederationControlScreen)
+        await wait_for_federation_idle(pilot, app.screen)
+        summary = str(app.screen.query_one("#federation-summary", Static).content)
+        hint = str(app.screen.query_one("#federation-hint", Static).content)
+        details = str(app.screen.query_one("#federation-details", Static).content)
+        cards = str(app.screen.query_one("#federation-host-cards", Static).content)
+        assert "Hosts: 2/2" in summary
+        assert "selected host" in hint
+        assert "Host:" in details
+        assert "[vm-a] HEALTHY" in cards
+        assert "[vm-b] DOWN" in cards
+        app.screen.query_one("#federation-filter", Input).value = "vm-b"
+        await pilot.pause()
+        options = app.screen.query_one("#federation-hosts", OptionList)
+        assert options.option_count == 1
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, FederationControlScreen)
+
+
+@pytest.mark.asyncio
+async def test_federation_control_center_dispatches_bulk_action_for_filtered_hosts(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        service,
+        "federated_sessions",
+        lambda hosts=None: [
+            {"host": "vm-a", "error": "", "sessions": [{"name": "claude-api"}]},
+            {"host": "vm-b", "error": "", "sessions": [{"name": "codex-review"}]},
+        ],
+    )
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def fake_action(action: str, *, hosts=None, args=()):
+        selected_hosts = tuple(hosts or [])
+        calls.append((action, selected_hosts))
+        return [{"host": host, "ok": True, "error": "", "stdout": ""} for host in selected_hosts]
+
+    monkeypatch.setattr(service, "federated_action", fake_action)
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("F")
+        await pilot.pause()
+        assert isinstance(app.screen, FederationControlScreen)
+        await wait_for_federation_idle(pilot, app.screen)
+        app.screen.query_one("#federation-filter", Input).value = "vm-b"
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.press("2")
+        await wait_for_federation_idle(pilot, app.screen)
+        assert calls == [("health", ("vm-b",))]
+        status = str(app.screen.query_one("#federation-action-status", Static).content)
+        assert "health completed on 1 host(s)" in status
+
+
+@pytest.mark.asyncio
+async def test_federation_control_center_focuses_matching_local_session(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local_name = create_managed(service, "api", Tool.CLAUDE)
+    monkeypatch.setattr(
+        service,
+        "federated_sessions",
+        lambda hosts=None: [
+            {"host": "vm-a", "error": "", "sessions": [{"name": local_name}]},
+        ],
+    )
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("F")
+        await pilot.pause()
+        assert isinstance(app.screen, FederationControlScreen)
+        await wait_for_federation_idle(pilot, app.screen)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert not isinstance(app.screen, FederationControlScreen)
+        assert app.selected_name == local_name
+
+
+@pytest.mark.asyncio
+async def test_federation_control_center_focuses_warning_session_first(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ok_name = create_managed(service, "api-ok", Tool.CLAUDE)
+    warn_name = create_managed(service, "api-warn", Tool.COPILOT)
+    monkeypatch.setattr(
+        service,
+        "federated_sessions",
+        lambda hosts=None: [
+            {
+                "host": "vm-a",
+                "error": "",
+                "sessions": [
+                    {"name": ok_name, "runtime": "attached", "task_state": "in_progress"},
+                    {"name": warn_name, "runtime": "stopped", "task_state": "blocked"},
+                ],
+            },
+        ],
+    )
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("F")
+        await pilot.pause()
+        assert isinstance(app.screen, FederationControlScreen)
+        await wait_for_federation_idle(pilot, app.screen)
+        await pilot.press("w")
+        await pilot.pause()
+        assert not isinstance(app.screen, FederationControlScreen)
+        assert app.selected_name == warn_name
+
+
+@pytest.mark.asyncio
+async def test_federation_control_center_manage_action_drillthrough(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warn_name = create_managed(service, "api-manage", Tool.CLAUDE)
+    monkeypatch.setattr(
+        service,
+        "federated_sessions",
+        lambda hosts=None: [
+            {
+                "host": "vm-a",
+                "error": "",
+                "sessions": [{"name": warn_name, "runtime": "failed", "task_state": "blocked"}],
+            },
+        ],
+    )
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("F")
+        await pilot.pause()
+        assert isinstance(app.screen, FederationControlScreen)
+        await wait_for_federation_idle(pilot, app.screen)
+        await pilot.press("m")
+        await pilot.pause()
+        assert isinstance(app.screen, ManageSessionScreen)
+        assert app.selected_name == warn_name
+
+
+@pytest.mark.asyncio
+async def test_federation_control_center_tracks_per_host_health_summary(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        service,
+        "federated_sessions",
+        lambda hosts=None: [
+            {"host": "vm-a", "error": "", "sessions": [{"name": "claude-api"}]},
+        ],
+    )
+
+    def fake_action(action: str, *, hosts=None, args=()):
+        assert action == "health"
+        host = (hosts or ["vm-a"])[0]
+        report = {
+            "checks": [
+                {"name": "disk", "status": "pass", "detail": "ok"},
+                {"name": "docker", "status": "warn", "detail": "degraded"},
+                {"name": "tmux", "status": "fail", "detail": "down"},
+            ]
+        }
+        return [{"host": host, "ok": False, "error": "exit 1", "stdout": json.dumps(report)}]
+
+    monkeypatch.setattr(service, "federated_action", fake_action)
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("F")
+        await pilot.pause()
+        assert isinstance(app.screen, FederationControlScreen)
+        await wait_for_federation_idle(pilot, app.screen)
+        await pilot.press("2")
+        await wait_for_federation_idle(pilot, app.screen)
+        details = str(app.screen.query_one("#federation-details", Static).content)
+        cards = str(app.screen.query_one("#federation-host-cards", Static).content)
+        assert "Health checks: fail=1 warn=1 pass=1" in details
+        assert "last-health=fail=1 warn=1 pass=1" in cards
+
+
+@pytest.mark.asyncio
+async def test_federation_control_center_renders_sla_panel_with_ownership_hints(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local_name = create_managed(service, "api-sla", Tool.CLAUDE)
     service.config = service.config.model_copy(
         update={
-            "health": HealthConfig(
-                enabled=True,
-                apt_updates_enabled=False,
-                reboot_required_enabled=False,
-                git_dirty_enabled=False,
-                docker_enabled=False,
-                disk_space_enabled=False,
-                idle_sessions_enabled=False,
-                orphaned_logs_enabled=False,
-                zombie_stale_after_days=1,
+            "sla_rules": (
+                SlaRuleConfig(
+                    name="urgent",
+                    severity="warn",
+                    detached_hours=1.0,
+                    blocked_hours=1.0,
+                    input_required_hours=1.0,
+                ),
             )
         }
     )
-    created = service.create(CreateRequest(name="stale", tool=Tool.SHELL, cwd=Path("/tmp")))
-    record = service.store.load(created.name)
-    assert record is not None
-    stale_record = record.model_copy(
-        update={
-            "last_attached_at": datetime.now(UTC) - timedelta(days=2),
-            "updated_at": datetime.now(UTC) - timedelta(days=2),
-        }
+    stale = (datetime.now(UTC) - timedelta(hours=5)).isoformat()
+    monkeypatch.setattr(
+        service,
+        "federated_sessions",
+        lambda hosts=None: [
+            {
+                "host": "vm-a",
+                "error": "",
+                "sessions": [
+                    {
+                        "name": local_name,
+                        "runtime": "detached",
+                        "task_state": "in_progress",
+                        "input_state": "none",
+                        "created_at": stale,
+                    }
+                ],
+            },
+        ],
     )
-    service.store.save(stale_record)
-    fake_backend.sessions.pop(created.name, None)
-
     app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
     async with app.run_test(size=(120, 35)) as pilot:
-        await wait_for_health_scan(pilot, app)
-        app.action_health_alerts()
+        await pilot.press("F")
         await pilot.pause()
-        assert isinstance(app.screen, HealthAlertsScreen)
-        screen = app.screen
-        for _ in range(40):
-            if not screen.running:
-                break
-            await pilot.pause(0.05)
-        assert any(check.name == "zombie-sessions" for check in screen.checks)
-        assert not screen.query_one("#health-alerts-fix", Button).disabled
+        assert isinstance(app.screen, FederationControlScreen)
+        await wait_for_federation_idle(pilot, app.screen)
+        panel = str(app.screen.query_one("#federation-sla-panel", Static).content)
+        assert "SLA breaches (1)" in panel
+        assert "vm-a/" in panel
+        assert "managed locally" in panel
 
-        await pilot.press("f")
-        for _ in range(40):
-            if not screen.running:
-                break
-            await pilot.pause(0.05)
-        assert service.store.load(created.name) is None
-        assert all(
-            check.status is not HealthStatus.WARN
-            for check in screen.checks
-            if check.name == "zombie-sessions"
-        )
+
+@pytest.mark.asyncio
+async def test_federation_control_center_saves_and_applies_pinned_view(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_federated_sessions(hosts=None):
+        selected = list(hosts or ["vm-a", "vm-b"])
+        rows = []
+        for host in selected:
+            rows.append({"host": host, "error": "", "sessions": [{"name": f"{host}-session"}]})
+        return rows
+
+    monkeypatch.setattr(service, "federated_sessions", fake_federated_sessions)
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("F")
+        await pilot.pause()
+        assert isinstance(app.screen, FederationControlScreen)
+        await wait_for_federation_idle(pilot, app.screen)
+        app.screen.query_one("#federation-filter", Input).value = "vm-b"
+        await pilot.pause()
+        app.screen.query_one("#federation-dashboard-name", Input).value = "ops"
+        await pilot.press("5")
+        await pilot.pause()
+        app.screen.query_one("#federation-filter", Input).value = ""
+        await pilot.pause()
+        await pilot.press("6")
+        await wait_for_federation_idle(pilot, app.screen)
+        summary = str(app.screen.query_one("#federation-summary", Static).content)
+        assert "Hosts: 1/1" in summary
+
+
+@pytest.mark.asyncio
+async def test_federation_control_center_renders_fleet_diff_panel(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        service,
+        "federated_sessions",
+        lambda hosts=None: [
+            {"host": "vm-a", "error": "", "sessions": [{"name": "a1"}]},
+            {"host": "vm-b", "error": "", "sessions": [{"name": "b1"}, {"name": "b2"}]},
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "fleet_diff_live",
+        lambda hosts=(): {
+            "baseline": "fleet-baseline",
+            "drifts": [
+                {"host": "vm-b", "field": "session_count", "left": 1, "right": 2},
+                {"host": "vm-b", "field": "detached", "left": 0, "right": 2},
+            ],
+            "host_spread": [{"field": "session_count", "spread": 1}],
+        },
+    )
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("F")
+        await pilot.pause()
+        assert isinstance(app.screen, FederationControlScreen)
+        await wait_for_federation_idle(pilot, app.screen)
+        await pilot.press("8")
+        await pilot.pause()
+        panel = str(app.screen.query_one("#federation-diff-panel", Static).content)
+        assert "Fleet diff vs fleet-baseline" in panel
+        assert "drift item" in panel
+
+
+@pytest.mark.asyncio
+async def test_federation_control_center_safe_mode_reduces_scan_budget(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_federated_sessions(hosts=None):
+        selected = list(hosts) if hosts else [f"vm-{index:02d}" for index in range(60)]
+        return [
+            {"host": host, "error": "", "sessions": [{"name": f"{host}-a"}]}
+            for host in selected
+        ]
+
+    monkeypatch.setattr(service, "federated_sessions", fake_federated_sessions)
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("F")
+        await pilot.pause()
+        assert isinstance(app.screen, FederationControlScreen)
+        await wait_for_federation_idle(pilot, app.screen)
+        summary = str(app.screen.query_one("#federation-summary", Static).content)
+        assert "Hosts: 60/60" in summary
+        await pilot.press("9")
+        await wait_for_federation_idle(pilot, app.screen)
+        summary = str(app.screen.query_one("#federation-summary", Static).content)
+        assert "Mode: safe" in summary
+        assert "Hosts: 40/40" in summary
 
 
 def _write_log(service: SessionService, name: str, content: str) -> None:

@@ -1,11 +1,22 @@
+import json
 import os
+import tarfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from conftest import FakeBackend
-from workspace_session_manager.config import AppConfig, HealthConfig
+from workspace_session_manager.config import (
+    ApprovalConfig,
+    AppConfig,
+    HealthConfig,
+    OperatorProfileConfig,
+    PlaybookConfig,
+    RemediationChainConfig,
+    SelfHealConfig,
+    SelfHealRuleConfig,
+)
 from workspace_session_manager.errors import (
     OwnershipError,
     PresetNotFoundError,
@@ -43,6 +54,15 @@ def test_foreign_session_is_hidden_but_available_for_diagnostics(
     with pytest.raises(OwnershipError, match="not created"):
         service.delete(session.name)
     assert fake_backend.session_exists(session.name)
+
+
+def test_unmanaged_session_infers_copilot_tool_from_command(
+    service: SessionService, fake_backend: FakeBackend
+) -> None:
+    fake_backend.add("external-agent", command="copilot")
+    session = service.get("external-agent", include_unmanaged=True)
+    assert not session.owned
+    assert session.tool is Tool.COPILOT
 
 
 def test_managed_lifecycle(
@@ -134,6 +154,27 @@ def test_missing_tool_fails_before_tmux_creation(
     with pytest.raises(ToolUnavailableError):
         service.create(CreateRequest(name="missing", tool=Tool.CLAUDE, cwd=tmp_path))
     assert fake_backend.sessions == {}
+
+
+def test_restart_refuses_when_tool_disabled_in_configuration(
+    service: SessionService,
+    fake_backend: FakeBackend,
+    tmp_path: Path,
+) -> None:
+    created = service.create(CreateRequest(name="disable-me", tool=Tool.CLAUDE, cwd=tmp_path))
+    disabled = service.config.model_copy(
+        update={
+            "tools": {
+                **service.config.tools,
+                Tool.CLAUDE: service.config.tools[Tool.CLAUDE].model_copy(
+                    update={"enabled": False}
+                ),
+            }
+        }
+    )
+    service.config = disabled
+    with pytest.raises(ToolUnavailableError):
+        service.restart(created.name)
 
 
 def test_attach_refuses_name_reused_after_ownership_check(
@@ -656,6 +697,38 @@ def test_delete_logs_preserves_enabled_logging(
     assert path.read_text(encoding="utf-8") == ""
 
 
+def test_undo_restores_pin_status_logging_and_interrupt_runtime(
+    service: SessionService,
+    fake_backend: FakeBackend,
+    tmp_path: Path,
+) -> None:
+    created = service.create(
+        CreateRequest(name="undo-stack", tool=Tool.SHELL, cwd=tmp_path, logging_enabled=True)
+    )
+    service.organize(created.name, pinned=True)
+    assert service.get(created.name).pinned
+    assert "restored pin state" in service.undo_last()
+    assert not service.get(created.name).pinned
+
+    service.organize(created.name, state=TaskState.BLOCKED, input_state=InputState.REQUIRED)
+    blocked = service.get(created.name)
+    assert blocked.task_state is TaskState.BLOCKED
+    assert blocked.input_state is InputState.REQUIRED
+    assert "restored status state" in service.undo_last()
+    reverted = service.get(created.name)
+    assert reverted.task_state is TaskState.IN_PROGRESS
+    assert reverted.input_state is InputState.NONE
+
+    service.set_logging(created.name, False)
+    assert not service.get(created.name).logging_enabled
+    assert "restored logging mode" in service.undo_last()
+    assert service.get(created.name).logging_enabled
+
+    service.stop_command(created.name)
+    assert fake_backend.interrupted == [created.name]
+    assert "restored runtime after interrupt" in service.undo_last()
+
+
 def test_live_restart_reestablishes_logging(
     service: SessionService,
     fake_backend: FakeBackend,
@@ -726,6 +799,7 @@ def _disk_only_service(tmp_path: Path, fake_backend: FakeBackend) -> SessionServ
             zombie_sessions_enabled=False,
             idle_sessions_enabled=False,
             orphaned_logs_enabled=False,
+            missing_cwd_enabled=False,
             disk_ttl_seconds=5.0,
         ),
     )
@@ -821,6 +895,36 @@ def test_cached_health_alerts_treats_corrupt_cache_file_as_uncached(
     assert checks[0].detail == "not yet checked"
 
 
+def test_write_health_cache_refuses_to_follow_a_symlinked_cache_file(
+    tmp_path: Path, fake_backend: FakeBackend
+) -> None:
+    service = _disk_only_service(tmp_path, fake_backend)
+    service.paths.health_dir.mkdir(parents=True)
+    outside_target = tmp_path / "outside.json"
+    outside_target.write_text("not touched", encoding="utf-8")
+    (service.paths.health_dir / "disk-space.json").symlink_to(outside_target)
+
+    service.refresh_health_alerts(force=True)
+
+    assert outside_target.read_text(encoding="utf-8") == "not touched"
+
+
+def test_read_health_cache_ignores_a_symlinked_cache_file(
+    tmp_path: Path, fake_backend: FakeBackend
+) -> None:
+    service = _disk_only_service(tmp_path, fake_backend)
+    service.paths.health_dir.mkdir(parents=True)
+    outside_target = tmp_path / "outside.json"
+    outside_target.write_text(
+        json.dumps({"checked_at": "2020-01-01T00:00:00+00:00", "check": {}}), encoding="utf-8"
+    )
+    (service.paths.health_dir / "disk-space.json").symlink_to(outside_target)
+
+    checks = service.cached_health_alerts()
+
+    assert checks[0].detail == "not yet checked"
+
+
 def test_refresh_health_alerts_isolates_check_that_raises_unexpectedly(
     tmp_path: Path, fake_backend: FakeBackend, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -849,6 +953,7 @@ def _hygiene_only_service(
             reboot_required_enabled=False,
             git_dirty_enabled=False,
             docker_enabled=False,
+            missing_cwd_enabled=False,
             **health_overrides,
         ),
     )
@@ -1177,3 +1282,755 @@ def test_delete_preset_removes_it(service: SessionService, tmp_path: Path) -> No
 def test_delete_preset_raises_when_missing(service: SessionService) -> None:
     with pytest.raises(PresetNotFoundError, match="not-here"):
         service.delete_preset("not-here")
+
+
+def test_operator_profile_selection_and_approval(
+    service: SessionService,
+) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "operator_profiles": (
+                OperatorProfileConfig(
+                    name="ops",
+                    default_project="platform",
+                    require_approvals=True,
+                    approval_code="1234",
+                ),
+            )
+        }
+    )
+    selected = service.select_operator_profile("ops")
+    assert selected["name"] == "ops"
+    assert service.active_operator_profile().get("name") == "ops"
+    assert service.evaluate_approval("delete", code="nope") is False
+    assert service.evaluate_approval("delete", code="1234") is True
+
+
+def test_signed_approval_token_passes_guarded_action(
+    service: SessionService,
+) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "approvals": ApprovalConfig(
+                enabled=True,
+                code="1234",
+                guarded_actions=("delete",),
+                token_signing_secret="secret",
+            )
+        }
+    )
+    token_payload = service.issue_approval_token(action="delete", operator="alice", ttl_seconds=600)
+    token = str(token_payload["token"])
+    assert service.evaluate_approval("delete", code="") is False
+    assert service.evaluate_approval("delete", code="", approval_tokens=(token,)) is True
+
+
+def test_dual_control_requires_distinct_token_operators(
+    service: SessionService,
+) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "approvals": ApprovalConfig(
+                enabled=True,
+                guarded_actions=("federation-action:resume:vm-a",),
+                token_signing_secret="secret",
+                dual_control_enabled=True,
+                dual_control_actions=("federation-action:resume:vm-a",),
+            )
+        }
+    )
+    token_a = str(
+        service.issue_approval_token(
+            action="federation-action:resume:vm-a",
+            operator="alice",
+            ttl_seconds=600,
+        )["token"]
+    )
+    token_b = str(
+        service.issue_approval_token(
+            action="federation-action:resume:vm-a",
+            operator="bob",
+            ttl_seconds=600,
+        )["token"]
+    )
+    assert (
+        service.evaluate_approval(
+            "federation-action:resume:vm-a",
+            code="",
+            approval_tokens=(token_a,),
+        )
+        is False
+    )
+    assert (
+        service.evaluate_approval(
+            "federation-action:resume:vm-a",
+            code="",
+            approval_tokens=(token_a, token_b),
+        )
+        is True
+    )
+
+
+def test_operator_profile_allowed_actions_guardrails(
+    service: SessionService, tmp_path: Path
+) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "operator_profiles": (
+                OperatorProfileConfig(
+                    name="restricted",
+                    allowed_actions=("create",),
+                ),
+            )
+        }
+    )
+    service.select_operator_profile("restricted")
+    created = service.create(CreateRequest(name="guarded", tool=Tool.SHELL, cwd=tmp_path))
+    with pytest.raises(WsError, match="action blocked by operator profile"):
+        service.update_note(created.name, "should fail")
+
+
+def test_federated_action_enforces_per_host_approval_for_resume(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "approvals": ApprovalConfig(
+                enabled=True,
+                code="1234",
+                guarded_actions=("federation-action:resume:vm-a",),
+            )
+        }
+    )
+    called = False
+
+    class FakeResult:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return FakeResult()
+
+    monkeypatch.setattr("workspace_session_manager.service.subprocess.run", fake_run)
+
+    with pytest.raises(WsError, match="approval required for remote action resume on host vm-a"):
+        service.federated_action("resume", hosts=("vm-a",))
+    assert called is False
+
+    rows = service.federated_action("resume", hosts=("vm-a",), approval_code="1234")
+    assert rows[0]["host"] == "vm-a"
+    assert rows[0]["ok"] is True
+    assert rows[0]["attempt_count"] == 1
+    assert rows[0]["retried"] is False
+
+
+def test_federated_action_retries_and_succeeds_after_transient_failure(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+
+    class FakeResult:
+        def __init__(self, returncode: int, stderr: str = "", stdout: str = "") -> None:
+            self.returncode = returncode
+            self.stderr = stderr
+            self.stdout = stdout
+
+    def fake_run(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return FakeResult(returncode=1, stderr="ssh timeout")
+        return FakeResult(returncode=0, stdout="ok")
+
+    monkeypatch.setattr("workspace_session_manager.service.subprocess.run", fake_run)
+    rows = service.federated_action(
+        "report",
+        hosts=("vm-a",),
+        retry_attempts=2,
+        retry_delay_seconds=0.0,
+    )
+    assert calls == 2
+    assert rows[0]["ok"] is True
+    assert rows[0]["attempt_count"] == 2
+    assert rows[0]["retried"] is True
+    attempts = rows[0]["attempts"]
+    assert isinstance(attempts, list)
+    assert "attempt 1: ssh timeout" in attempts[0]
+    assert "attempt 2: ok" in attempts[1]
+
+
+def test_federated_action_failure_summary_after_retry_exhaustion(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeResult:
+        returncode = 255
+        stderr = "permission denied"
+        stdout = ""
+
+    monkeypatch.setattr(
+        "workspace_session_manager.service.subprocess.run",
+        lambda *_args, **_kwargs: FakeResult(),
+    )
+    rows = service.federated_action(
+        "health",
+        hosts=("vm-a",),
+        retry_attempts=2,
+        retry_delay_seconds=0.0,
+    )
+    assert rows[0]["ok"] is False
+    assert rows[0]["attempt_count"] == 2
+    assert rows[0]["retried"] is True
+    assert rows[0]["failure_summary"] == "failed after 2 attempt(s): permission denied"
+
+
+def test_federation_action_plan_reports_blast_radius_and_missing_approval(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "approvals": ApprovalConfig(
+                enabled=True,
+                guarded_actions=("federation-action:resume:vm-a",),
+                code="1234",
+            )
+        }
+    )
+    monkeypatch.setattr(
+        service,
+        "federated_sessions",
+        lambda hosts=None: [
+            {
+                "host": "vm-a",
+                "error": "",
+                "sessions": [
+                    {"name": "a1", "runtime": "detached", "task_state": "blocked", "input_state": "required"}
+                ],
+            }
+        ],
+    )
+    payload = service.federation_action_plan("resume", hosts=("vm-a",))
+    assert payload["blast_radius"]["session_count"] == 1
+    assert payload["blast_radius"]["risk_level"] in {"medium", "high"}
+    assert payload["approval"]["required"] is True
+    assert payload["approval"]["satisfied"] is False
+
+
+def test_federation_capability_matrix_reports_command_and_tool_support(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        service,
+        "federated_sessions",
+        lambda hosts=None: [{"host": "vm-a", "error": "ssh flaky", "sessions": [{"name": "one"}]}],
+    )
+
+    def fake_probe(host: str, *args: str) -> dict[str, object]:
+        assert host == "vm-a"
+        if args == ("--help",):
+            return {
+                "ok": True,
+                "stdout": "Commands:\n  list\n  health\n  report\n",
+                "stderr": "",
+                "returncode": 0,
+                "error": "",
+            }
+        if args == ("doctor", "--json"):
+            return {
+                "ok": True,
+                "stdout": json.dumps(
+                    {
+                        "checks": [
+                            {"name": "tool:claude", "status": "pass", "detail": "/bin/claude"},
+                            {"name": "tool:copilot", "status": "warn", "detail": "not found"},
+                        ]
+                    }
+                ),
+                "stderr": "",
+                "returncode": 0,
+                "error": "",
+            }
+        raise AssertionError(f"unexpected probe args: {args}")
+
+    monkeypatch.setattr(service, "_remote_ws_probe", fake_probe)
+    rows = service.federation_capability_matrix(hosts=("vm-a",))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["session_error"] == "ssh flaky"
+    commands = row["commands"]
+    assert isinstance(commands, dict)
+    assert commands["list"]["supported"] is True
+    assert commands["resume"]["supported"] is False
+    assert "not listed" in str(commands["resume"]["reason"])
+    tools = row["tools"]
+    assert isinstance(tools, dict)
+    assert tools["claude"]["supported"] is True
+    assert tools["copilot"]["supported"] is False
+    assert "not found" in str(tools["copilot"]["reason"])
+
+
+def test_federation_dashboard_save_get_list_delete(service: SessionService) -> None:
+    saved = service.save_federation_dashboard(
+        name="night-ops",
+        hosts=("vm-b", "vm-a"),
+        host_filter="vm",
+        scope_all_hosts=True,
+        safe_mode=True,
+    )
+    assert saved["name"] == "night-ops"
+    listed = service.list_federation_dashboards()
+    assert listed and listed[0]["name"] == "night-ops"
+    loaded = service.get_federation_dashboard("night-ops")
+    assert loaded["hosts"] == ["vm-a", "vm-b"]
+    assert loaded["scope_all_hosts"] is True
+    assert loaded["safe_mode"] is True
+    service.delete_federation_dashboard("night-ops")
+    assert service.list_federation_dashboards() == []
+
+
+def test_fleet_snapshot_and_live_diff_detects_operational_drift(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = {"phase": "baseline"}
+
+    def fake_federated_sessions(hosts=None):
+        if state["phase"] == "baseline":
+            return [
+                {
+                    "host": "vm-a",
+                    "error": "",
+                    "sessions": [
+                        {"name": "a1", "runtime": "attached", "task_state": "in_progress", "tool": "claude"}
+                    ],
+                }
+            ]
+        return [
+            {
+                "host": "vm-a",
+                "error": "",
+                "sessions": [
+                    {"name": "a1", "runtime": "detached", "task_state": "blocked", "tool": "copilot"},
+                    {"name": "a2", "runtime": "stopped", "task_state": "blocked", "tool": "copilot"},
+                ],
+            }
+        ]
+
+    monkeypatch.setattr(service, "federated_sessions", fake_federated_sessions)
+    snapshot = service.save_fleet_snapshot(name="fleet-baseline")
+    assert snapshot["name"] == "fleet-baseline"
+    state["phase"] = "drifted"
+    payload = service.fleet_diff(left="fleet-baseline")
+    drifts = payload["drifts"]
+    assert any(row["field"] == "session_count" and row["host"] == "vm-a" for row in drifts)
+    assert any(row["field"] == "blocked" and row["host"] == "vm-a" for row in drifts)
+    assert any(row["field"] == "tool:copilot" and row["host"] == "vm-a" for row in drifts)
+
+
+def test_fleet_diff_host_spread_signals_detect_cross_host_skew(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        service,
+        "federated_sessions",
+        lambda hosts=None: [
+            {"host": "vm-a", "error": "", "sessions": [{"name": "a1", "runtime": "attached"}]},
+            {
+                "host": "vm-b",
+                "error": "",
+                "sessions": [
+                    {"name": "b1", "runtime": "detached"},
+                    {"name": "b2", "runtime": "detached"},
+                ],
+            },
+        ],
+    )
+    service.save_fleet_snapshot(name="fleet-a")
+    payload = service.fleet_diff(left="fleet-a")
+    spread = payload["host_spread"]
+    assert any(item["field"] == "session_count" for item in spread)
+
+
+def test_fleet_diff_anomalies_detect_high_spread_and_large_deltas(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "federation": service.config.federation.model_copy(
+                update={"anomaly_spread_threshold": 2, "anomaly_delta_threshold": 2}
+            )
+        }
+    )
+    state = {"phase": "baseline"}
+
+    def fake_federated_sessions(hosts=None):
+        if state["phase"] == "baseline":
+            return [
+                {"host": "vm-a", "error": "", "sessions": [{"name": "a1", "runtime": "attached"}]},
+                {"host": "vm-b", "error": "", "sessions": [{"name": "b1", "runtime": "attached"}]},
+            ]
+        return [
+            {"host": "vm-a", "error": "", "sessions": []},
+            {
+                "host": "vm-b",
+                "error": "",
+                "sessions": [
+                    {"name": "b1", "runtime": "detached"},
+                    {"name": "b2", "runtime": "detached"},
+                    {"name": "b3", "runtime": "detached"},
+                    {"name": "b4", "runtime": "detached"},
+                ],
+            },
+        ]
+
+    monkeypatch.setattr(service, "federated_sessions", fake_federated_sessions)
+    service.save_fleet_snapshot(name="fleet-baseline")
+    state["phase"] = "drifted"
+    payload = service.fleet_diff(left="fleet-baseline")
+    anomalies = payload["anomalies"]
+    assert anomalies
+    assert any(item["type"] == "spread" for item in anomalies)
+
+
+def test_incident_lifecycle_start_update_close(service: SessionService) -> None:
+    opened = service.start_incident(
+        title="api-timeout",
+        severity="fail",
+        owner="ops",
+        summary="upstream timeout",
+        sessions=("claude-api",),
+        hosts=("vm-a",),
+    )
+    incident_id = str(opened["id"])
+    assert opened["status"] == "open"
+    updated = service.update_incident(incident_id, note="triage started", owner="oncall")
+    assert updated["owner"] == "oncall"
+    closed = service.close_incident(incident_id, resolution="restarted worker")
+    assert closed["status"] == "closed"
+    listed = service.list_incidents(status="closed")
+    assert any(str(item["id"]) == incident_id for item in listed)
+
+
+def test_dependency_graph_round_trip(service: SessionService) -> None:
+    service.add_dependency("api-worker", "api-db")
+    service.add_dependency("api-worker", "api-cache")
+    service.add_dependency("api-ingest", "api-worker")
+    graph = service.dependency_graph()
+    assert graph["api-worker"] == ["api-cache", "api-db"]
+    assert service.dependency_critical_path() == ["api-cache", "api-worker", "api-ingest"]
+    service.remove_dependency("api-worker", "api-cache")
+    assert service.dependency_graph()["api-worker"] == ["api-db"]
+
+
+def test_unified_search_uses_rebuilt_index(
+    service: SessionService, fake_backend: FakeBackend, tmp_path: Path
+) -> None:
+    created = service.create(
+        CreateRequest(name="searchable", tool=Tool.SHELL, cwd=tmp_path, note="auth timeout")
+    )
+    fake_backend.previews[created.name] = "retry after timeout"
+    service.rebuild_search_index()
+    matches = service.unified_search("timeout")
+    assert matches
+    assert matches[0]["session"] == created.name
+
+
+def test_unified_search_supports_facets_and_related_sessions(
+    service: SessionService, fake_backend: FakeBackend, tmp_path: Path
+) -> None:
+    api = service.create(
+        CreateRequest(
+            name="api-timeout",
+            tool=Tool.SHELL,
+            cwd=tmp_path,
+            project="api",
+            note="timeout in upstream call",
+            tags=["backend"],
+        )
+    )
+    service.organize(api.name, state=TaskState.BLOCKED)
+    peer = service.create(
+        CreateRequest(
+            name="api-helper",
+            tool=Tool.SHELL,
+            cwd=tmp_path,
+            project="api",
+            note="healthy helper",
+            tags=["backend"],
+        )
+    )
+    ui = service.create(
+        CreateRequest(
+            name="ui-timeout",
+            tool=Tool.SHELL,
+            cwd=tmp_path,
+            project="ui",
+            note="timeout in frontend",
+            tags=["frontend"],
+        )
+    )
+    fake_backend.previews[api.name] = "timeout from db"
+    fake_backend.previews[ui.name] = "timeout from cdn"
+    service.rebuild_search_index()
+    matches = service.unified_search("project:api state:blocked timeout")
+    assert matches
+    assert matches[0]["session"] == api.name
+    assert peer.name in matches[0]["related_sessions"]
+    assert all(row["session"] != ui.name for row in matches)
+
+
+def test_search_query_save_list_delete_roundtrip(service: SessionService) -> None:
+    saved = service.save_search_query("Blocked API", "project:api state:blocked timeout")
+    assert saved["name"] == "blocked-api"
+    assert saved["query"] == "project:api state:blocked timeout"
+    listed = service.list_search_queries()
+    assert any(row["name"] == "blocked-api" for row in listed)
+    assert service.get_search_query("blocked-api") == "project:api state:blocked timeout"
+    service.delete_search_query("blocked-api")
+    assert not any(row["name"] == "blocked-api" for row in service.list_search_queries())
+
+
+def test_run_playbook_and_write_audit(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "playbooks": (
+                PlaybookConfig(
+                    name="diag",
+                    commands=(("echo", "ok"),),
+                ),
+            )
+        }
+    )
+
+    class FakeResult:
+        returncode = 0
+        stdout = "ok\n"
+        stderr = ""
+
+    monkeypatch.setattr(service, "runner", lambda *_args, **_kwargs: FakeResult())
+    rows = service.run_playbook("diag")
+    assert rows[0]["returncode"] == 0
+    assert any("playbook.run" in line for line in service.read_audit(limit=20))
+
+
+def test_snapshot_diff_reports_changed_keys(service: SessionService, tmp_path: Path) -> None:
+    left = tmp_path / "a.json"
+    right = tmp_path / "b.json"
+    left.write_text(json.dumps({"a": 1, "b": 2}), encoding="utf-8")
+    right.write_text(json.dumps({"a": 1, "b": 3, "c": 4}), encoding="utf-8")
+    diff = service.snapshot_diff(left, right)
+    assert diff["equal"] is False
+    assert sorted(diff["changes"]) == ["b", "c"]
+
+
+def test_builtin_playbooks_are_listed_and_support_preview(service: SessionService) -> None:
+    rows = service.list_playbooks()
+    names = {str(row["name"]) for row in rows}
+    assert "quota-hit" in names
+    preview = service.run_playbook("quota-hit", preview=True)
+    assert preview
+    assert preview[0]["preview"] is True
+    assert preview[0]["returncode"] is None
+
+
+def test_export_incident_bundle_contains_expected_artifacts(
+    service: SessionService, fake_backend: FakeBackend, tmp_path: Path
+) -> None:
+    created = service.create(CreateRequest(name="incident-api", tool=Tool.SHELL, cwd=tmp_path))
+    fake_backend.previews[created.name] = "error: timeout while contacting upstream"
+    service.append_timeline(created.name, "restart", "manual recovery")
+    service.append_audit("incident.note", "captured timeout regression")
+
+    bundle = service.export_incident_bundle(
+        sessions=(created.name,),
+        timeline_limit=5,
+        audit_limit=20,
+        destination=tmp_path / "incident-bundle.tar.gz",
+    )
+
+    assert bundle.is_file()
+    with tarfile.open(bundle, "r:gz") as archive:
+        names = set(archive.getnames())
+        assert "manifest.json" in names
+        assert "health.json" in names
+        assert "audit.log" in names
+        assert f"sessions/{created.name}.json" in names
+        session_blob = archive.extractfile(f"sessions/{created.name}.json")
+        assert session_blob is not None
+        payload = json.loads(session_blob.read().decode("utf-8"))
+        assert payload["session"]["name"] == created.name
+        assert payload["recent_output"]
+        assert payload["timeline"]
+
+
+def test_export_incident_bundle_includes_crosshost_federation_evidence(
+    service: SessionService, fake_backend: FakeBackend, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created = service.create(CreateRequest(name="incident-fed", tool=Tool.SHELL, cwd=tmp_path))
+    fake_backend.previews[created.name] = "federated incident detail"
+    monkeypatch.setattr(
+        service,
+        "federated_sessions",
+        lambda hosts=None: [{"host": "vm-a", "error": "", "sessions": [{"name": "remote-a"}]}],
+    )
+    monkeypatch.setattr(
+        service,
+        "federated_action",
+        lambda action, hosts=None, args=(): [
+            {"host": "vm-a", "ok": True, "error": "", "stdout": json.dumps({"checks": []})}
+        ]
+        if action == "health"
+        else [{"host": "vm-a", "ok": True, "error": "", "stdout": json.dumps({"sessions": 1})}],
+    )
+
+    bundle = service.export_incident_bundle(
+        sessions=(created.name,),
+        include_federation=True,
+        federation_hosts=("vm-a",),
+        destination=tmp_path / "incident-federation-bundle.tar.gz",
+    )
+
+    with tarfile.open(bundle, "r:gz") as archive:
+        names = set(archive.getnames())
+        assert "federation/sessions.json" in names
+        assert "federation/health.json" in names
+        assert "federation/report.json" in names
+        manifest_blob = archive.extractfile("manifest.json")
+        assert manifest_blob is not None
+        manifest = json.loads(manifest_blob.read().decode("utf-8"))
+        assert manifest["federation_enabled"] is True
+        assert manifest["federation_hosts"] == ["vm-a"]
+
+
+def test_self_heal_preview_runs_matching_policies_and_writes_audit(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "playbooks": (
+                PlaybookConfig(name="diag", commands=(("echo", "ok"),)),
+            ),
+            "self_heal": SelfHealConfig(
+                enabled=True,
+                rules=(
+                    SelfHealRuleConfig(
+                        name="disk-heal",
+                        when_checks=("disk-space",),
+                        min_status="warn",
+                        action="playbook",
+                        playbook="diag",
+                        session_scope="none",
+                    ),
+                ),
+            ),
+        }
+    )
+
+    class FakeResult:
+        returncode = 0
+        stdout = "ok\n"
+        stderr = ""
+
+    monkeypatch.setattr(service, "runner", lambda *_args, **_kwargs: FakeResult())
+    monkeypatch.setattr(
+        service,
+        "refresh_health_alerts",
+        lambda force=False, only=None: [
+            HealthCheck(name="disk-space", status=HealthStatus.WARN, detail="low disk")
+        ],
+    )
+    payload = service.self_heal(apply=False)
+    assert payload["enabled"] is True
+    assert payload["actions"]
+    first = payload["actions"][0]
+    assert first["rule"] == "disk-heal"
+    assert first["mode"] == "preview"
+    assert any("self-heal.preview" in line for line in service.read_audit(limit=50))
+
+
+def test_remediation_chain_runs_and_supports_rollback_playbook(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "playbooks": (
+                PlaybookConfig(name="diag", commands=(("echo", "ok"),)),
+                PlaybookConfig(name="rollback", commands=(("echo", "rollback"),)),
+            ),
+            "remediation_chains": (
+                RemediationChainConfig(
+                    name="chain-a",
+                    when_checks=("disk-space",),
+                    steps=("playbook:diag", "recover-repair"),
+                    rollback_playbook="rollback",
+                ),
+            ),
+        }
+    )
+
+    class FakeResult:
+        returncode = 0
+        stdout = "ok\n"
+        stderr = ""
+
+    monkeypatch.setattr(service, "runner", lambda *_args, **_kwargs: FakeResult())
+    monkeypatch.setattr(
+        service,
+        "refresh_health_alerts",
+        lambda force=False, only=None: [
+            HealthCheck(name="disk-space", status=HealthStatus.WARN, detail="low disk")
+        ],
+    )
+    monkeypatch.setattr(service, "integrity_report", lambda: {"presets": [], "filter_presets": [], "templates": [], "timeline": []})
+    payload = service.run_remediation_chain("chain-a", apply=False)
+    assert payload["triggered"] is True
+    assert payload["steps"]
+
+
+def test_self_heal_chain_action_delegates_to_remediation_chain(
+    service: SessionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "self_heal": SelfHealConfig(
+                enabled=True,
+                rules=(
+                    SelfHealRuleConfig(
+                        name="run-chain",
+                        when_checks=("disk-space",),
+                        action="chain",
+                        chain="chain-a",
+                        session_scope="none",
+                    ),
+                ),
+            ),
+        }
+    )
+    monkeypatch.setattr(
+        service,
+        "refresh_health_alerts",
+        lambda force=False, only=None: [
+            HealthCheck(name="disk-space", status=HealthStatus.WARN, detail="warn")
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "run_remediation_chain",
+        lambda name, apply=False, alerts=None: {
+            "name": name,
+            "applied": apply,
+            "triggered": True,
+            "ok": True,
+            "steps": [],
+            "matched_checks": ["disk-space"],
+            "rollback": None,
+        },
+    )
+    payload = service.self_heal(apply=False)
+    assert payload["actions"]
+    first = payload["actions"][0]
+    assert first["action"] == "chain"
+    assert first["ok"] is True

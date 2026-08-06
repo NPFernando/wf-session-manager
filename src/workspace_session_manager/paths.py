@@ -32,6 +32,50 @@ class AppPaths:
         return self.state_dir / "presets.json"
 
     @property
+    def filter_presets_file(self) -> Path:
+        return self.state_dir / "filter-presets.json"
+
+    @property
+    def templates_file(self) -> Path:
+        return self.state_dir / "templates.json"
+
+    @property
+    def undo_file(self) -> Path:
+        return self.state_dir / "undo.json"
+
+    @property
+    def dependencies_file(self) -> Path:
+        return self.state_dir / "dependencies.json"
+
+    @property
+    def search_index_file(self) -> Path:
+        return self.cache_dir / "search-index.json"
+
+    @property
+    def search_queries_file(self) -> Path:
+        return self.state_dir / "search-queries.json"
+
+    @property
+    def federation_dashboards_file(self) -> Path:
+        return self.state_dir / "federation-dashboards.json"
+
+    @property
+    def federation_fleet_snapshots_file(self) -> Path:
+        return self.state_dir / "federation-fleet-snapshots.json"
+
+    @property
+    def incidents_file(self) -> Path:
+        return self.state_dir / "incidents.json"
+
+    @property
+    def audit_log_file(self) -> Path:
+        return self.state_dir / "audit.log"
+
+    @property
+    def timeline_dir(self) -> Path:
+        return self.state_dir / "timeline"
+
+    @property
     def interface_preferences_file(self) -> Path:
         return self.state_dir / "interface.json"
 
@@ -50,6 +94,10 @@ class AppPaths:
     @property
     def diagnostics_dir(self) -> Path:
         return self.cache_dir / "diagnostics"
+
+    @property
+    def backups_dir(self) -> Path:
+        return self.cache_dir / "backups"
 
     @property
     def health_dir(self) -> Path:

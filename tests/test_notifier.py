@@ -71,3 +71,10 @@ def test_urllib_telegram_sender_rejects_unsafe_scheme() -> None:
 
     result = urllib_telegram_sender("ftp://evil.example.com", "token", "chat", "hi", 5.0)
     assert result is False
+
+
+def test_urllib_telegram_sender_rejects_plaintext_http() -> None:
+    from workspace_session_manager.notifier import urllib_telegram_sender
+
+    result = urllib_telegram_sender("http://relay.example.com", "token", "chat", "hi", 5.0)
+    assert result is False

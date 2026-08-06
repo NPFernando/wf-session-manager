@@ -21,7 +21,7 @@ def urllib_telegram_sender(
     api_base: str, bot_token: str, chat_id: str, text: str, timeout: float
 ) -> bool:
     """POST a Telegram sendMessage request; return True only on a confirmed ok response."""
-    if not api_base.startswith(("https://", "http://")):
+    if not api_base.startswith("https://"):
         return False
     url = f"{api_base.rstrip('/')}/bot{bot_token}/sendMessage"
     payload = json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8")

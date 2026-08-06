@@ -3,8 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+import re
 
 import pytest
+from rich.console import Console
 from textual.pilot import Pilot
 from textual.widgets import Button, Input, LoadingIndicator, Static
 
@@ -25,11 +27,33 @@ from workspace_session_manager.tui import (
 
 SnapCompare = Callable[..., bool]
 FUTURE_ACTIVITY = datetime(2099, 1, 1, tzinfo=UTC)
+pytestmark = pytest.mark.layout_snapshot
+
+_ORIGINAL_EXPORT_SVG = Console.export_svg
+
+
+def _export_svg_stable(self: Console, *args: object, **kwargs: object) -> str:
+    rendered = _ORIGINAL_EXPORT_SVG(self, *args, **kwargs)
+    return re.sub(r"terminal-\\d+", "terminal", rendered)
+
+
+Console.export_svg = _export_svg_stable
 
 
 @pytest.fixture(autouse=True)
 def deterministic_color(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("WS_SNAPSHOT_MODE", "1")
+    monkeypatch.setenv("WS_SNAPSHOT_NOW", "2099-01-01T00:00:00+00:00")
+    frozen = datetime(2099, 1, 1, tzinfo=UTC)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: object | None = None) -> datetime:
+            return frozen if tz is not None else frozen.replace(tzinfo=None)
+
+    monkeypatch.setattr("workspace_session_manager.service.datetime", FrozenDateTime)
+    monkeypatch.setattr("workspace_session_manager.store.datetime", FrozenDateTime)
 
 
 def add_session(

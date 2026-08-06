@@ -84,4 +84,6 @@ addopts = "-ra --strict-config --strict-markers --cov=workspace_session_manager 
 testpaths = ["tests"]
 markers = [
   "integration: uses an isolated, uniquely named real tmux session",
+  "layout_snapshot: deterministic Textual visual snapshot tests",
+  "tui_behavior: interactive Textual behavior tests without SVG snapshots",
 ]
