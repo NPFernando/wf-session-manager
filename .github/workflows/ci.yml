@@ -58,7 +58,14 @@ jobs:
       - name: Install project
         run: uv sync --locked --extra dev
       - name: Layout snapshot monitor
-        run: uv run pytest -m layout_snapshot -q --no-cov
+        run: uv run pytest -m layout_snapshot -q --no-cov --junitxml=layout-snapshot-monitor.xml
+      - name: Upload layout snapshot monitor report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: layout-snapshot-monitor-report
+          path: layout-snapshot-monitor.xml
+          if-no-files-found: error
 
   package:
     runs-on: ubuntu-latest
