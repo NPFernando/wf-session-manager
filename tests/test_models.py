@@ -25,6 +25,7 @@ def test_slugify_and_tool_prefix() -> None:
         normalized_session_name(Tool.CLAUDE, "api-refactor", automatic_prefix=False)
         == "api-refactor"
     )
+    assert normalized_session_name(Tool.COPILOT, "review") == "copilot-review"
     assert normalized_session_name(Tool.CODEX, "codex-review") == "codex-review"
     assert normalized_session_name(Tool.SHELL, "Diagnostics") == "diagnostics"
 

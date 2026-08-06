@@ -15,6 +15,8 @@ environment_display = "hidden" # hidden, label, hostname
 environment_label = ""
 default_grouping = "attention" # attention, runtime, agent, project, warning, recent
 default_density = "comfortable" # compact, comfortable
+default_text_scale = "comfortable" # compact, comfortable, readable
+performance_profile = "balanced" # ssh-safe, balanced, rich
 
 [health]
 enabled = true
@@ -36,9 +38,107 @@ project_scan_roots = [
   "/srv/projects",
   "~/workspace/projects",
 ]
+idle_auto_wait_days = 0 # 0 disables auto-mark waiting
+
+[[health.custom_checks]]
+name = "gateway-health"
+command = ["curl", "-fsS", "http://127.0.0.1:8642/health"]
+status_on_failure = "warn" # info, warn, fail
+ttl_seconds = 60.0
+corrective_action = "Restart Hermes gateway or verify local networking."
+
+[[sla_rules]]
+name = "default-detached"
+severity = "warn" # info, warn, fail
+detached_hours = 72.0
+blocked_hours = 24.0
+input_required_hours = 12.0
+
+[federation]
+hosts = [] # e.g. ["ubuntu@vm-a", "ubuntu@vm-b"]
+ssh_command = ["ssh"]
+remote_ws_command = ["ws", "list", "--json"]
+timeout_seconds = 8.0
+action_retry_attempts = 2
+action_retry_delay_seconds = 0.4
+anomaly_spread_threshold = 2
+anomaly_delta_threshold = 3
+
+[archive_policy]
+enabled = false
+completed_days = 14
+include_logs = true
+include_timeline = true
+dry_run_default = true
+
+[approvals]
+enabled = false
+code = ""
+guarded_actions = ["delete", "stop-session", "bulk-stop-command", "remove-metadata"]
+token_signing_secret = "" # set for signed/expiring approval tokens
+token_ttl_seconds = 900
+dual_control_enabled = false
+dual_control_actions = [] # e.g. ["federation-action:resume:vm-a"]
+# Federation guard examples:
+# - "federation-action"                  (all remote actions)
+# - "federation-action:resume"           (all resume actions)
+# - "federation-action:resume:vm-a"      (resume on one host)
+
+[[automation_hooks]]
+event = "session.created"
+command = ["echo", "hook"]
+timeout_seconds = 5.0
+api_version = 1
+
+[[operator_profiles]]
+name = "default"
+default_project = ""
+require_approvals = false
+approval_code = ""
+allowed_actions = []
+
+[[playbooks]]
+name = "quick-diagnose"
+match_any = ["error", "timeout"]
+commands = [
+  ["ws", "health"],
+  ["ws", "report"],
+]
+timeout_seconds = 10.0
+
+[self_heal]
+enabled = false
+
+[[self_heal.rules]]
+name = "quota-recovery"
+when_checks = ["zombie-sessions", "idle-sessions"]
+min_status = "warn"
+action = "playbook"
+playbook = "quota-hit"
+chain = ""
+session_scope = "related"
+max_sessions = 5
+
+[[remediation_chains]]
+name = "stability-recovery"
+when_checks = ["disk-space", "zombie-sessions"]
+min_status = "warn"
+steps = ["playbook:quota-hit", "archive"]
+rollback_playbook = ""
+
+[[project_defaults]]
+project = "api"
+tool = "claude"
+tags = ["backend"]
+task_template = "Continue API hardening and authentication cleanup."
+logging_enabled = true
 
 [tools.claude]
 command = ["claude"]
+enabled = true
+
+[tools.copilot]
+command = ["copilot"]
 enabled = true
 
 [tools.codex]

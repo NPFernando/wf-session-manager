@@ -35,6 +35,21 @@ Reviewed before/after frames at
 Fake-backend terminal recordings and replay instructions are stored under `docs/recordings/`; they
 never connect to the live tmux server or production metadata.
 
+Run layout snapshots separately from interactive behavior:
+
+```bash
+WS_SNAPSHOT_MODE=1 WS_SNAPSHOT_NOW=2099-01-01T00:00:00+00:00 \
+  uv run pytest -m layout_snapshot tests/test_tui_snapshots.py
+uv run pytest -m tui_behavior tests/test_tui.py
+```
+
+When intentional UI changes are made, update only the snapshot baseline:
+
+```bash
+WS_SNAPSHOT_MODE=1 WS_SNAPSHOT_NOW=2099-01-01T00:00:00+00:00 \
+  uv run pytest -m layout_snapshot tests/test_tui_snapshots.py --snapshot-update
+```
+
 ## Terminal compatibility matrix
 
 This is a compatibility and evidence matrix, not a promise that every terminal behaves identically.

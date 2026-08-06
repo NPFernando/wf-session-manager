@@ -191,6 +191,7 @@ def app_config() -> AppConfig:
     return AppConfig(
         tools={
             Tool.CLAUDE: ToolProfile(command=("/bin/true",)),
+            Tool.COPILOT: ToolProfile(command=("/bin/true",)),
             Tool.CODEX: ToolProfile(command=("/bin/true",)),
             Tool.HERMES: ToolProfile(command=("/bin/true",)),
             Tool.SHELL: ToolProfile(command=("/bin/bash", "-l")),

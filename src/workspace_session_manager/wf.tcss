@@ -3,6 +3,87 @@ Screen {
     color: $foreground;
 }
 
+/* Design tokens v2 (semantic intent)
+   spacing-xs=0, spacing-sm=1, spacing-md=2, spacing-lg=3
+   radius-soft=tall, radius-sharp=none
+*/
+
+.motion-off .dialog,
+.motion-off Button {
+    transition: none;
+}
+
+.dialog {
+    transition: offset 140ms in_out_cubic, opacity 140ms linear;
+}
+
+Button {
+    transition: background 90ms linear, color 90ms linear, border 90ms linear;
+}
+
+Button.-primary,
+.button-primary {
+    background: $primary;
+    color: $foreground-lighten-1;
+    text-style: bold;
+}
+
+Button.-default,
+.button-secondary {
+    background: $panel-lighten-1;
+    color: $foreground-darken-1;
+}
+
+Button.-error,
+.button-danger {
+    color: $foreground;
+    background: $error-muted;
+}
+
+.button-ghost {
+    background: transparent;
+    color: $foreground-muted;
+    border: none;
+}
+
+.text-scale-compact #app-header {
+    height: 2;
+    padding: 0 2;
+}
+
+.text-scale-compact .section-title {
+    height: 1;
+    padding-top: 0;
+}
+
+.text-scale-readable #app-header {
+    height: 4;
+}
+
+.text-scale-readable #search-hint {
+    width: 34;
+}
+
+.text-scale-readable .section-body {
+    min-height: 2;
+}
+
+.text-scale-readable .section-title {
+    height: 2;
+    padding-top: 0;
+}
+
+.text-scale-readable .field-label,
+.text-scale-readable .mode-help {
+    height: auto;
+    min-height: 1;
+}
+
+#health-alerts-header {
+    height: 1;
+    color: $foreground-muted;
+}
+
 #log-header {
     dock: top;
     height: 3;
@@ -10,6 +91,14 @@ Screen {
     background: $panel;
     border-bottom: solid $border;
     overflow: hidden;
+}
+
+#health-alerts-selected {
+    height: auto;
+    min-height: 5;
+    padding: 0 1;
+    background: $background-darken-1;
+    color: $foreground-darken-1;
 }
 
 #header-band {
@@ -44,7 +133,8 @@ Screen {
 
 .overlay-active #search-mode,
 .overlay-active #action-bar,
-.overlay-active #health-row {
+.overlay-active #health-row,
+.overlay-active #jobs-row {
     display: none;
 }
 
@@ -56,11 +146,31 @@ Screen {
     border-bottom: solid $border;
 }
 
+.has-jobs-row #jobs-row {
+    visibility: visible;
+    border-bottom: solid $border;
+}
+
+#jobs-row {
+    display: block;
+    visibility: hidden;
+    height: 1;
+    padding: 0 2;
+    background: $panel;
+    color: $foreground-muted;
+    border-bottom: none;
+    overflow: hidden;
+}
+
 .has-critical-alerts #health-row {
     display: block;
 }
 
 .searching #health-row {
+    display: none;
+}
+
+.searching #jobs-row {
     display: none;
 }
 
@@ -113,6 +223,17 @@ Screen {
     color: $foreground-darken-1;
 }
 
+#session-toolbar Button.button-primary {
+    background: $primary;
+    color: $foreground-lighten-1;
+    text-style: bold;
+}
+
+#session-toolbar Button.button-secondary {
+    background: $panel-lighten-1;
+    color: $foreground-darken-1;
+}
+
 #session-toolbar Button:focus {
     background: $primary-muted;
     color: $foreground-lighten-1;
@@ -141,21 +262,27 @@ Screen {
 
 OptionList > .option-list--option {
     padding: 0 1;
+    color: $foreground-darken-1;
 }
 
 OptionList > .option-list--option:hover {
-    background: $background-lighten-1;
+    background: $panel-lighten-1;
 }
 
 OptionList > .option-list--option-highlighted {
+    background: $primary-lighten-1;
+    color: $foreground-lighten-2;
+    text-style: bold;
+}
+
+OptionList > .option-list--option-highlighted:hover {
     background: $primary;
     color: #ffffff;
-    text-style: none;
 }
 
 OptionList > .option-list--option-disabled {
     color: $foreground-muted;
-    background: $surface;
+    background: $background-darken-1;
     padding-top: 1;
 }
 
@@ -324,8 +451,14 @@ OptionList > .option-list--option-disabled {
 }
 
 .session-action-button {
-    min-width: 9;
+    min-width: 8;
     margin-right: 1;
+}
+
+#action-disabled-reason {
+    height: 1;
+    color: $warning;
+    overflow: hidden;
 }
 
 .compact-density OptionList > .option-list--option {
@@ -471,6 +604,37 @@ OptionList > .option-list--option-disabled {
     padding: 0 1;
 }
 
+.viewport-100x30 #health-row {
+    height: 1;
+}
+
+.viewport-100x30 #app-header {
+    height: 2;
+    padding: 0 1;
+}
+
+.viewport-100x30 #action-bar {
+    height: 1;
+    padding: 0 1;
+}
+
+.viewport-80x24 #toolbar-health,
+.viewport-80x24 #toolbar-refresh {
+    display: none;
+}
+
+.viewport-80x24 #toolbar-group {
+    display: none;
+}
+
+.viewport-80x24 #sessions {
+    height: 1fr;
+}
+
+.viewport-80x24 #output-card {
+    min-height: 6;
+}
+
 .very-narrow #health-row {
     display: none;
 }
@@ -569,6 +733,8 @@ ModalScreen {
 .field-status.invalid,
 #create-submit-reason.invalid {
     color: $error;
+    border-left: solid $error;
+    padding-left: 1;
 }
 
 .field-status.warning {
@@ -597,15 +763,29 @@ ModalScreen {
 .create-dialog Input,
 .create-dialog Select {
     height: 1;
-    border: none;
+    border: tall $border;
     background: $background-darken-1;
 }
 
 .create-dialog Input:focus,
 .create-dialog Select:focus {
-    border: none;
+    border: tall $primary;
     background: $primary-muted;
     color: $foreground-lighten-1;
+}
+
+.form-section {
+    height: 1;
+    margin-top: 1;
+    color: $foreground-muted;
+    text-style: bold;
+}
+
+.validation-list {
+    height: auto;
+    min-height: 4;
+    padding-left: 18;
+    color: $foreground-darken-1;
 }
 
 #create-cwd {
@@ -671,6 +851,10 @@ ModalScreen {
     height: 1;
     min-height: 1;
     padding: 0 1;
+}
+
+#manage-actions > .option-list--option:hover {
+    background: $surface;
 }
 
 #manage-actions > .option-list--option-disabled {
@@ -760,6 +944,10 @@ ModalScreen {
     height: 1;
     min-height: 1;
     padding: 0 1;
+}
+
+#search-output-results > .option-list--option:hover {
+    background: $surface;
 }
 
 #search-output-results > .option-list--option-disabled {
@@ -892,11 +1080,19 @@ ModalScreen {
     color: $foreground-muted;
 }
 
+.modal-breadcrumb {
+    height: auto;
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
 .mode-help {
     height: auto;
     min-height: 1;
     margin-top: 1;
     color: $text-muted;
+    border-left: solid $border;
+    padding-left: 1;
 }
 
 .field-label {
@@ -925,7 +1121,13 @@ Button {
 }
 
 Button:hover {
-    background: $background-lighten-1;
+    background: $panel-lighten-2;
+}
+
+Button.button-feedback-press {
+    background: $panel-lighten-1;
+    color: $foreground-lighten-1;
+    text-style: bold;
 }
 
 Button:focus {
@@ -940,9 +1142,75 @@ Button:disabled {
     text-style: none;
 }
 
+Button.button-feedback-success {
+    background: $success-muted;
+    color: $foreground-lighten-1;
+}
+
+Button.button-feedback-error {
+    background: $error-muted;
+    color: $foreground-lighten-1;
+}
+
+Button.button-loading {
+    border: tall $primary;
+    background: $panel-lighten-1;
+    color: $foreground-lighten-1;
+}
+
+.accent-vivid Button.-primary,
+.accent-vivid .button-primary {
+    background: $accent;
+    color: $foreground-lighten-1;
+}
+
+.accent-calm Button.-primary,
+.accent-calm .button-primary {
+    background: $panel-lighten-1;
+    color: $foreground-lighten-1;
+}
+
+.accent-safe Button.-primary,
+.accent-safe .button-primary {
+    background: #0f4c81;
+    color: #fff7d4;
+    border: tall #ffd23f;
+}
+
+.high-contrast #app-header,
+.high-contrast #action-bar,
+.high-contrast .inspector-card,
+.high-contrast .dialog {
+    border: tall $foreground;
+}
+
+.high-contrast Button {
+    text-style: bold;
+    border: tall $foreground;
+    color: $foreground;
+    background: $background;
+}
+
+.high-contrast .field-status.invalid,
+.high-contrast #create-submit-reason.invalid {
+    color: #ff6b6b;
+    border-left: solid #ff6b6b;
+}
+
+.high-contrast OptionList > .option-list--option-highlighted {
+    background: $foreground;
+    color: $background;
+}
+
 Button.-error {
     color: $foreground;
     background: $error-muted;
+}
+
+Button.-primary:focus,
+.button-primary:focus {
+    border: tall $primary-lighten-1;
+    background: $primary-lighten-1;
 }
 
 Button.-error:focus {
@@ -1038,6 +1306,14 @@ Button.-error:focus {
     color: $text-muted;
 }
 
+.inline-chip {
+    height: auto;
+    margin-left: 18;
+    color: $text-warning;
+    border-left: solid $warning-muted;
+    padding: 0 1;
+}
+
 #create-advanced-content {
     height: auto;
 }
@@ -1077,6 +1353,11 @@ Button.-error:focus {
     margin-left: 1;
 }
 
+.danger-dialog .dialog-actions Button.-error,
+.danger-dialog .dialog-actions .button-danger {
+    margin-left: 3;
+}
+
 .create-dialog .dialog-actions {
     margin-top: 0;
 }
@@ -1097,6 +1378,27 @@ Button.-error:focus {
 
 .danger-dialog {
     border: solid $error;
+}
+
+.danger-chip {
+    height: auto;
+    color: $text-error;
+    background: $error-muted;
+    border-left: solid $error;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+#confirm-typed,
+#delete-confirm {
+    height: 1;
+    border: tall $border;
+    background: $background-darken-1;
+}
+
+#confirm-typed:focus,
+#delete-confirm:focus {
+    border: tall $error;
 }
 
 .danger-title {
@@ -1146,6 +1448,98 @@ Button.-error:focus {
 .diagnostics-actions {
     height: auto;
     min-height: 6;
+}
+
+#federation-body {
+    height: 1fr;
+    margin-top: 1;
+}
+
+#federation-hosts-pane {
+    width: 42%;
+    min-width: 28;
+}
+
+#federation-hosts {
+    height: 1fr;
+    min-height: 10;
+    background: $background-darken-1;
+    padding: 1;
+}
+
+#federation-detail-pane {
+    width: 58%;
+}
+
+#federation-host-cards-scroll {
+    height: 1fr;
+    min-height: 10;
+    margin-left: 1;
+    padding: 1;
+    border: solid $border;
+    background: $background-darken-1;
+    scrollbar-color: $scrollbar;
+    scrollbar-background: $scrollbar-background;
+}
+
+#federation-host-cards {
+    height: auto;
+    color: $foreground-muted;
+}
+
+#federation-details {
+    height: auto;
+    min-height: 8;
+    margin: 1 0 0 1;
+    padding: 0 1;
+    background: $surface;
+}
+
+#federation-sla-panel {
+    height: auto;
+    min-height: 4;
+    margin: 1 0 0 1;
+    padding: 0 1;
+    background: $surface;
+    color: $foreground-muted;
+}
+
+#federation-diff-panel {
+    height: auto;
+    min-height: 4;
+    margin: 1 0 0 1;
+    padding: 0 1;
+    background: $surface;
+    color: $foreground-muted;
+}
+
+#federation-action-status {
+    height: auto;
+    min-height: 2;
+    margin: 1 0 0 1;
+    color: $text-muted;
+}
+
+#preset-launcher-dialog {
+    width: 74;
+}
+
+#preset-launcher-options {
+    height: 12;
+    min-height: 8;
+    max-height: 14;
+    background: $surface;
+    border: none;
+}
+
+#preset-launcher-options > .option-list--option {
+    height: 1;
+    min-height: 1;
+    padding: 0 1;
+}
+
+#preset-launcher-options > .option-list--option:hover {
+    background: $surface;
 }
 
 .logs-workspace {

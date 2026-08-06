@@ -38,6 +38,7 @@ def normalize_tags(values: list[str]) -> list[str]:
 
 class Tool(StrEnum):
     CLAUDE = "claude"
+    COPILOT = "copilot"
     CODEX = "codex"
     HERMES = "hermes"
     SHELL = "shell"
@@ -101,6 +102,30 @@ class InterfacePreferences(BaseModel):
     schema_version: Literal[1] = 1
     grouping: Literal["attention", "runtime", "agent", "project", "warning", "recent"] = "attention"
     density: Literal["compact", "comfortable"] = "comfortable"
+    text_scale: Literal["compact", "comfortable", "readable"] = "comfortable"
+    motion_preset: Literal["auto", "off", "subtle", "full"] = "auto"
+    accent_mode: Literal["default", "vivid", "calm", "safe"] = "default"
+    high_contrast: bool = False
+    auto_contrast: bool = False
+    create_advanced_by_default: bool = False
+    hint_level: Literal["minimal", "verbose"] = "minimal"
+    hint_profile: Literal["beginner", "advanced"] = "advanced"
+    project_profiles: dict[str, "ProjectVisualProfile"] = Field(default_factory=dict)
+
+
+class ProjectVisualProfile(BaseModel):
+    """Project-scoped visual preferences applied when focusing project sessions."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    ui_theme: str = "ithaca"
+    density: Literal["compact", "comfortable"] = "comfortable"
+    text_scale: Literal["compact", "comfortable", "readable"] = "comfortable"
+    motion_preset: Literal["auto", "off", "subtle", "full"] = "auto"
+    accent_mode: Literal["default", "vivid", "calm", "safe"] = "default"
+    high_contrast: bool = False
+    auto_contrast: bool = False
+    hint_level: Literal["minimal", "verbose"] = "minimal"
+    hint_profile: Literal["beginner", "advanced"] = "advanced"
 
 
 LEGACY_TASK_STATES = {
@@ -318,6 +343,64 @@ class Preset(BaseModel):
     @classmethod
     def valid_tags(cls, values: list[str]) -> list[str]:
         return normalize_tags(values)
+
+
+class FilterPreset(BaseModel):
+    """Saved dashboard filter set reusable in TUI and CLI."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    name: str
+    query: str = ""
+    tool: Tool | None = None
+    runtime: RuntimeState | None = None
+    task: TaskState | None = None
+    tag: str | None = None
+    project: str | None = None
+    warnings_only: bool = False
+    recent_only: bool = False
+    quick_filter: Literal["all", "active", "detached", "warnings", "stopped", "blocked"] = "all"
+    grouping: Literal["attention", "runtime", "agent", "project", "warning", "recent"] | None = (
+        None
+    )
+    density: Literal["compact", "comfortable"] | None = None
+
+
+class SessionTimelineEvent(BaseModel):
+    """Immutable operation history row for one session."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    timestamp: datetime = Field(default_factory=utc_now)
+    action: str
+    detail: str = ""
+
+
+class SessionTemplate(BaseModel):
+    """Reusable create-session template with variable placeholders."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    name: str
+    tool: Tool
+    name_template: str
+    cwd_template: str
+    project_template: str = ""
+    note_template: str = ""
+    tags: Annotated[list[str], Field(max_length=12)] = Field(default_factory=list)
+    logging_enabled: bool = True
+
+    @field_validator("tags")
+    @classmethod
+    def valid_tags(cls, values: list[str]) -> list[str]:
+        return normalize_tags(values)
+
+
+class UndoEntry(BaseModel):
+    """Short-lived rollback record for risky actions."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime
+    action: str
+    payload: dict[str, object] = Field(default_factory=dict)
 
 
 class HealthStatus(StrEnum):
