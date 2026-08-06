@@ -15,13 +15,13 @@ from pydantic import ValidationError
 
 from workspace_session_manager.errors import StateError
 from workspace_session_manager.models import (
-    FilterPreset,
     SESSION_NAME_PATTERN,
+    FilterPreset,
     InterfacePreferences,
     Preset,
-    SessionTimelineEvent,
-    SessionTemplate,
     SessionMetadata,
+    SessionTemplate,
+    SessionTimelineEvent,
     UndoEntry,
 )
 from workspace_session_manager.paths import AppPaths
@@ -504,7 +504,9 @@ class TimelineStore:
         except (OSError, ValidationError, ValueError) as error:
             raise StateError(f"invalid timeline file: {error}") from error
 
-    def append(self, session_name: str, event: SessionTimelineEvent, *, max_events: int = 200) -> None:
+    def append(
+        self, session_name: str, event: SessionTimelineEvent, *, max_events: int = 200
+    ) -> None:
         self.paths.timeline_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self.paths.timeline_dir, 0o700)
         path = self._path(session_name)
@@ -521,7 +523,9 @@ class TimelineStore:
                 delete=False,
             ) as temporary:
                 temporary_name = temporary.name
-                temporary.write(json.dumps([item.model_dump(mode="json") for item in events], indent=2))
+                temporary.write(
+                    json.dumps([item.model_dump(mode="json") for item in events], indent=2)
+                )
                 temporary.write("\n")
                 temporary.flush()
                 os.fsync(temporary.fileno())

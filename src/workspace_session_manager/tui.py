@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
 import base64
+import contextlib
 import json
 import locale
 import os
@@ -11,11 +11,11 @@ import re
 import shlex
 import socket
 import sys
-from difflib import SequenceMatcher
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from difflib import SequenceMatcher
 from enum import StrEnum
 from pathlib import Path
 from time import perf_counter
@@ -305,6 +305,8 @@ def modal_breadcrumb(*segments: str) -> str:
     if not cleaned:
         return "Dashboard"
     return " -> ".join(cleaned)
+
+
 USAGE_LIMIT_PATTERN = re.compile(
     r"(?im)^(?P<line>[^\n]*(?:(?:usage|session|rate)\s+limit\s+"
     r"(?:has been\s+|was\s+)?(?:reached|exceeded)|"
@@ -671,10 +673,10 @@ def build_session_groups(
         if grouping == "attention":
             if not session.owned:
                 label = "UNMANAGED"
-            elif (
-                session.input_state is InputState.REQUIRED
-                or session.task_state in {TaskState.NEEDS_INPUT, TaskState.BLOCKED}
-            ):
+            elif session.input_state is InputState.REQUIRED or session.task_state in {
+                TaskState.NEEDS_INPUT,
+                TaskState.BLOCKED,
+            }:
                 label = "BLOCKED"
             elif notice.warning:
                 label = "WARNINGS"
@@ -880,7 +882,7 @@ def session_row(
     """Build a stable, compact row sized to its current pane."""
     alert = notice or detect_activity(session, "")
     if alert.level == "error":
-        marker = "x" if ascii_only else "×"
+        marker = "x" if ascii_only else "\u00d7"
     elif alert.warning:
         marker = "!"
     elif session.runtime is RuntimeState.ATTACHED:
@@ -903,7 +905,7 @@ def session_row(
         ""
         if marker in {" ", "○", "o"}
         else warning_dim_color
-        if ((marker == "!" or marker == "×") and pulse_dim)
+        if ((marker == "!" or marker == "\u00d7") and pulse_dim)
         else warning_color
     )
     row.append(f"{marker} ", style=marker_style)
@@ -1307,9 +1309,13 @@ class CreateSessionScreen(ModalScreen[CreateFormResult | None]):
         self._validated_signature = None
         self._validated_request = None
         self.query_one("#create-submit", Button).disabled = True
-        for field in ("name", "cwd"):
-            if field in self._touched:
-                self._render_field_status(f"#create-{field}-status", "checking", "Checking...")
+        for field_name in ("name", "cwd"):
+            if field_name in self._touched:
+                self._render_field_status(
+                    f"#create-{field_name}-status",
+                    "checking",
+                    "Checking...",
+                )
         self._render_readiness()
         serial = self._validation_serial
         self._validation_timer = self.set_timer(0.2, lambda: self._validate(serial))
@@ -1360,21 +1366,22 @@ class CreateSessionScreen(ModalScreen[CreateFormResult | None]):
         )
         project_status.set_class(bool(detected_project), "valid")
         if self.service and detected_project:
-            default_tool, default_tags, default_task, default_logging = self.service.project_default(
-                detected_project
+            default_tool, default_tags, default_task, default_logging = (
+                self.service.project_default(detected_project)
             )
             if not self._tool_user_edited and default_tool is not None and default_tool is not tool:
                 with self.prevent(Select.Changed):
                     self.query_one("#create-tool", Select).value = default_tool.value
                 self._schedule_validation()
                 return
-            if "tags" not in self._touched and default_tags and not self.query_one("#create-tags", Input).value:
+            if (
+                "tags" not in self._touched
+                and default_tags
+                and not self.query_one("#create-tags", Input).value
+            ):
                 with self.prevent(Input.Changed):
                     self.query_one("#create-tags", Input).value = ", ".join(default_tags)
-            if (
-                default_task
-                and not self.query_one("#create-note", TextArea).text.strip()
-            ):
+            if default_task and not self.query_one("#create-note", TextArea).text.strip():
                 with self.prevent(TextArea.Changed):
                     self.query_one("#create-note", TextArea).text = default_task
             if default_logging is not None and not self._touched.intersection({"logging"}):
@@ -1430,21 +1437,21 @@ class CreateSessionScreen(ModalScreen[CreateFormResult | None]):
             ("valid", f"Directory exists: {display_path(resolved_cwd)}")
             if resolved_cwd is not None
             else ("invalid", cwd_error or f"Directory does not exist: {display_path(cwd)}"),
-            ("valid", f"Executable ready: {command[0]}") if not tool_error else ("invalid", tool_error),
-            ("valid", f"Session ID available as: {normalized}") if not name_error else ("invalid", name_error),
+            ("valid", f"Executable ready: {command[0]}")
+            if not tool_error
+            else ("invalid", tool_error),
+            ("valid", f"Session ID available as: {normalized}")
+            if not name_error
+            else ("invalid", name_error),
             ("valid", f"Project detected: {detected_project}")
             if detected_project
             else ("warning", "Project not detected"),
         ]
         validation = Text()
-        markers = {"valid": "✓", "warning": "!", "invalid": "×"}
+        markers = {"valid": "✓", "warning": "!", "invalid": "\u00d7"}
         for state, message in validation_lines:
             style = (
-                "#72c78e"
-                if state == "valid"
-                else "#e9b44c"
-                if state == "warning"
-                else "#ef6b73"
+                "#72c78e" if state == "valid" else "#e9b44c" if state == "warning" else "#ef6b73"
             )
             validation.append(f"{markers[state]} {message}\n", style)
         self.query_one("#create-validation", Static).update(validation)
@@ -1549,7 +1556,8 @@ class CreateSessionScreen(ModalScreen[CreateFormResult | None]):
         reason.remove_class("invalid")
         if "name" not in self._touched or not self.query_one("#create-name", Input).value:
             reason.update(
-                "Enter Session ID to continue. Tip: open advanced options to tune startup/runtime controls."
+                "Enter Session ID to continue. "
+                "Tip: open advanced options to tune startup/runtime controls."
             )
         elif errors:
             reason.update(f"Create disabled: {errors[0]}")
@@ -1562,8 +1570,12 @@ class CreateSessionScreen(ModalScreen[CreateFormResult | None]):
             reason.update("Checking validation...")
 
     def _render_form_progress(self, errors: list[str]) -> None:
-        name_ready = bool(self.query_one("#create-name", Input).value.strip()) and "name" in self._touched
-        cwd_ready = "cwd" in self._touched and not self.query_one("#create-cwd-status", Static).has_class("invalid")
+        name_ready = (
+            bool(self.query_one("#create-name", Input).value.strip()) and "name" in self._touched
+        )
+        cwd_ready = "cwd" in self._touched and not self.query_one(
+            "#create-cwd-status", Static
+        ).has_class("invalid")
         tool_ready = not self.query_one("#create-tool-status", Static).has_class("invalid")
         completed = sum((name_ready, cwd_ready, tool_ready))
         status = "ready" if self._validated_request is not None and not errors else "in progress"
@@ -1923,7 +1935,9 @@ class IdentityOrganizationScreen(ModalScreen[OrganizationEditResult | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="identity-dialog", classes="dialog identity-dialog"):
             yield Label("Identity & Organization", classes="dialog-title")
-            yield Static(modal_breadcrumb("Dashboard", "Manage", "Identity"), classes="modal-breadcrumb")
+            yield Static(
+                modal_breadcrumb("Dashboard", "Manage", "Identity"), classes="modal-breadcrumb"
+            )
             yield Static(self.session.name, classes="dialog-context")
             yield Label("Display name", classes="field-label")
             yield Input(
@@ -2058,7 +2072,9 @@ class IdentityOrganizationScreen(ModalScreen[OrganizationEditResult | None]):
             return
         if self._validated_result is not None:
             if isinstance(self.app, WsApp):
-                self.app._clear_form_draft(f"identity:{self.session.name}:{self.session.session_id}")
+                self.app._clear_form_draft(
+                    f"identity:{self.session.name}:{self.session.session_id}"
+                )
             self.dismiss(self._validated_result)
 
     def action_cancel(self) -> None:
@@ -2075,7 +2091,7 @@ class IdentityOrganizationScreen(ModalScreen[OrganizationEditResult | None]):
                 ("project", "#identity-project"),
                 ("tags", "#identity-tags"),
             ):
-                if (value := str(self.draft.get(key, "")).strip()):
+                if value := str(self.draft.get(key, "")).strip():
                     self.query_one(selector, Input).value = value
 
     def _persist_draft(self) -> None:
@@ -2109,7 +2125,9 @@ class NoteScreen(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="note-dialog", classes="dialog task-dialog"):
             yield Label("Edit Task", classes="dialog-title")
-            yield Static(modal_breadcrumb("Dashboard", "Manage", "Edit task"), classes="modal-breadcrumb")
+            yield Static(
+                modal_breadcrumb("Dashboard", "Manage", "Edit task"), classes="modal-breadcrumb"
+            )
             yield Static(self.session.name, classes="dialog-context")
             yield TextArea(
                 self.session.note,
@@ -2198,7 +2216,9 @@ class StatusScreen(ModalScreen[StatusEditResult | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="status-dialog", classes="dialog small-dialog status-dialog"):
             yield Label("Task & Input Status", classes="dialog-title")
-            yield Static(modal_breadcrumb("Dashboard", "Manage", "Status"), classes="modal-breadcrumb")
+            yield Static(
+                modal_breadcrumb("Dashboard", "Manage", "Status"), classes="modal-breadcrumb"
+            )
             yield Static(self.session.name, classes="dialog-context")
             yield Label("Task state", classes="field-label")
             yield Select(
@@ -2252,9 +2272,9 @@ class StatusScreen(ModalScreen[StatusEditResult | None]):
         if not self.draft:
             return
         with self.prevent(Select.Changed):
-            if (task_state := str(self.draft.get("task_state", "")).strip()):
+            if task_state := str(self.draft.get("task_state", "")).strip():
                 self.query_one("#status-task-state", Select).value = task_state
-            if (input_state := str(self.draft.get("input_state", "")).strip()):
+            if input_state := str(self.draft.get("input_state", "")).strip():
                 self.query_one("#status-input-state", Select).value = input_state
 
     def _persist_draft(self) -> None:
@@ -2558,9 +2578,8 @@ class ManageSessionScreen(ModalScreen[ManageSelection | None]):
         if action_id == "delete-logs":
             return f"state: delete sanitized logs for {name}"
         if action_id == "logging":
-            return (
-                f"state: logging {'disable' if self.session.logging_enabled else 'enable'} for {name}"
-            )
+            logging_action = "disable" if self.session.logging_enabled else "enable"
+            return f"state: logging {logging_action} for {name}"
         if action_id == "pin":
             return f"state: {'unpin' if self.session.pinned else 'pin'} {name}"
         return ""
@@ -2671,7 +2690,9 @@ class DeleteSessionScreen(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Vertical(id="delete-dialog", classes="dialog danger-dialog"):
             yield Label("Delete session and metadata", classes="dialog-title danger-title")
-            yield Static(modal_breadcrumb("Dashboard", "Manage", "Delete"), classes="modal-breadcrumb")
+            yield Static(
+                modal_breadcrumb("Dashboard", "Manage", "Delete"), classes="modal-breadcrumb"
+            )
             yield Static(
                 "HIGH RISK  Runtime stops immediately and metadata history is removed.",
                 classes="danger-chip",
@@ -2734,7 +2755,9 @@ class ConfirmActionScreen(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Vertical(id="confirm-dialog", classes="dialog danger-dialog small-dialog"):
             yield Label(self.confirm_title, classes="dialog-title danger-title")
-            yield Static(modal_breadcrumb("Dashboard", "Manage", "Confirm"), classes="modal-breadcrumb")
+            yield Static(
+                modal_breadcrumb("Dashboard", "Manage", "Confirm"), classes="modal-breadcrumb"
+            )
             risk_copy = {
                 "medium": "MEDIUM RISK  Verify state and impact before continuing.",
                 "high": "HIGH RISK  Verify impact before continuing.",
@@ -2835,7 +2858,9 @@ class BulkActionScreen(ModalScreen[str | None]):
                 Option("[e] Export handoff summaries", id="bulk-handoff"),
                 id="bulk-actions",
             )
-            yield Static("BULK  Up/Down or j/k Navigate   Enter Apply   Esc Back", classes="mode-help")
+            yield Static(
+                "BULK  Up/Down or j/k Navigate   Enter Apply   Esc Back", classes="mode-help"
+            )
             with Horizontal(classes="dialog-actions"):
                 yield Button("Back", id="bulk-cancel")
 
@@ -3156,7 +3181,9 @@ class PolicySandboxScreen(ModalScreen[None]):
             idle_note = ""
         except ValueError:
             idle_days = self.service.config.health.idle_auto_wait_days
-            idle_note = f"\nIdle auto-wait days: invalid value {idle_days_raw!r}; using current config."
+            idle_note = (
+                f"\nIdle auto-wait days: invalid value {idle_days_raw!r}; using current config."
+            )
         baseline = self.service.policy_simulation()
         archive_candidates = baseline.get("archive_candidates", [])
         archive_count = len(archive_candidates) if archive_enabled else 0
@@ -3435,7 +3462,11 @@ class HealthAlertsScreen(ModalScreen[str | None]):
                 content.append(f"     Action: {check.corrective_action}\n", "dim")
         self.query_one("#health-alerts-content", Static).update(content)
         focused = next(
-            (check for check in self.checks if check.status in {HealthStatus.WARN, HealthStatus.FAIL}),
+            (
+                check
+                for check in self.checks
+                if check.status in {HealthStatus.WARN, HealthStatus.FAIL}
+            ),
             None,
         )
         selected = self.query_one("#health-alerts-selected", Static)
@@ -3591,8 +3622,13 @@ class DependencyGraphScreen(ModalScreen[None]):
         for index, node in enumerate(self._dependency_nodes):
             blocked_by = graph.get(node, [])
             marker = "*" if node in critical else "-"
+            truncated_node = truncate(
+                node,
+                30,
+                ascii_only=getattr(self.app, "ascii_only", False),
+            )
             label = Text()
-            label.append(f"{marker} {truncate(node, 30, ascii_only=getattr(self.app, 'ascii_only', False)):<30}")
+            label.append(f"{marker} {truncated_node:<30}")
             label.append(f"{len(blocked_by):>4}", "dim")
             option_id = f"dep-node-{index}"
             self._index_to_node[option_id] = node
@@ -3720,7 +3756,9 @@ class FederationControlScreen(ModalScreen[str | None]):
                 yield Input(placeholder="dashboard name", id="federation-dashboard-name")
             with Horizontal(id="federation-body"):
                 with Vertical(id="federation-hosts-pane"):
-                    yield Static("HOST                         STATUS  SESSIONS", id="federation-header")
+                    yield Static(
+                        "HOST                         STATUS  SESSIONS", id="federation-header"
+                    )
                     yield OptionList(id="federation-hosts")
                 with Vertical(id="federation-detail-pane"):
                     with VerticalScroll(id="federation-host-cards-scroll"):
@@ -3732,7 +3770,9 @@ class FederationControlScreen(ModalScreen[str | None]):
                     yield Static("", id="federation-action-status")
             yield LoadingIndicator(id="federation-loading")
             yield Static(
-                "FEDERATION  Enter Focus local   w Focus warning   m Manage local   l Logs local   5 Save view   6 Apply view   7 Delete view   8 Fleet diff   a Scope (host/all)   1 List   2 Health   3 Report   4 Resume   r Refresh   Esc Back",
+                "FEDERATION  Enter Focus local   w Focus warning   m Manage local   l Logs local"
+                "   5 Save view   6 Apply view   7 Delete view   8 Fleet diff   a Scope (host/all)"
+                "   1 List   2 Health   3 Report   4 Resume   r Refresh   Esc Back",
                 classes="mode-help",
             )
             with Horizontal(classes="dialog-actions diagnostics-actions"):
@@ -3948,9 +3988,14 @@ class FederationControlScreen(ModalScreen[str | None]):
             )
             counts = self._session_counts(safe_sessions)
             _, health = self._host_health_label(row, host)
+            host_label = truncate(
+                host,
+                34,
+                ascii_only=getattr(self.app, "ascii_only", False),
+            )
             cards.extend(
                 (
-                    f"[{truncate(host, 34, ascii_only=getattr(self.app, 'ascii_only', False))}] {health}",
+                    f"[{host_label}] {health}",
                     (
                         f" sessions={len(safe_sessions)} attached={counts['attached']} "
                         f"detached={counts['detached']} stopped={counts['stopped']}"
@@ -4010,9 +4055,9 @@ class FederationControlScreen(ModalScreen[str | None]):
             for item in sessions[: self._session_scan_budget()]:
                 if not isinstance(item, dict):
                     continue
-                anchor = self._parse_remote_timestamp(item.get("last_active_at")) or self._parse_remote_timestamp(
-                    item.get("created_at")
-                )
+                anchor = self._parse_remote_timestamp(
+                    item.get("last_active_at")
+                ) or self._parse_remote_timestamp(item.get("created_at"))
                 if anchor is None:
                     continue
                 age_hours = max(0.0, (now - anchor).total_seconds() / 3600.0)
@@ -4043,7 +4088,11 @@ class FederationControlScreen(ModalScreen[str | None]):
             panel.update("SLA breaches: none across filtered hosts.")
             return
         capped = violations[:8]
-        suffix = f"\n... and {len(violations) - len(capped)} more" if len(violations) > len(capped) else ""
+        suffix = (
+            f"\n... and {len(violations) - len(capped)} more"
+            if len(violations) > len(capped)
+            else ""
+        )
         panel.update(f"SLA breaches ({len(violations)}):\n" + "\n".join(capped) + suffix)
 
     def _render_dashboard_list(self) -> None:
@@ -4065,21 +4114,21 @@ class FederationControlScreen(ModalScreen[str | None]):
         if payload is None:
             panel.update("Fleet diff: press 8 to compare current hosts with latest saved snapshot.")
             return
-        baseline = str(payload.get("baseline", "")).strip() or str(
-            payload.get("left", {}).get("name", "")
-        ).strip()
+        baseline = (
+            str(payload.get("baseline", "")).strip()
+            or str(payload.get("left", {}).get("name", "")).strip()
+        )
         drifts = payload.get("drifts", [])
         spread = payload.get("host_spread", [])
         if not isinstance(drifts, list) or not isinstance(spread, list):
             panel.update("Fleet diff: unavailable.")
             return
         if not drifts and not spread:
-            panel.update(
-                f"Fleet diff vs {baseline or 'baseline'}: no drift detected."
-            )
+            panel.update(f"Fleet diff vs {baseline or 'baseline'}: no drift detected.")
             return
         lines = [
-            f"Fleet diff vs {baseline or 'baseline'}: {len(drifts)} drift item(s), {len(spread)} spread signal(s)."
+            f"Fleet diff vs {baseline or 'baseline'}: {len(drifts)} drift item(s), "
+            f"{len(spread)} spread signal(s)."
         ]
         for row in drifts[:4]:
             if not isinstance(row, dict):
@@ -4121,7 +4170,9 @@ class FederationControlScreen(ModalScreen[str | None]):
             _, status = self._host_health_label(row, host)
             reachable += int(not error)
             label = Text()
-            label.append(f"{truncate(host, 27, ascii_only=getattr(self.app, 'ascii_only', False)):<27} ")
+            label.append(
+                f"{truncate(host, 27, ascii_only=getattr(self.app, 'ascii_only', False)):<27} "
+            )
             status_style = {
                 "HEALTHY": "green",
                 "WATCH": "yellow",
@@ -4141,9 +4192,11 @@ class FederationControlScreen(ModalScreen[str | None]):
                 f"   Scan budget: {len(self._rows_by_host)}/{self._loaded_hosts_total} hosts, "
                 f"{self._session_scan_budget()} sessions/host ({mode})"
             )
-        self.query_one("#federation-summary", Static).update(
-            f"Hosts: {len(hosts)}/{len(self._rows_by_host)}   Reachable: {reachable}   Sessions: {total_sessions}   Action scope: {scope}   Mode: {mode}{extra}"
+        summary_text = (
+            f"Hosts: {len(hosts)}/{len(self._rows_by_host)}   Reachable: {reachable}   "
+            f"Sessions: {total_sessions}   Action scope: {scope}   Mode: {mode}{extra}"
         )
+        self.query_one("#federation-summary", Static).update(summary_text)
         status_widget = self.query_one("#federation-action-status", Static)
         if not str(status_widget.content).strip():
             status_widget.update(
@@ -4157,7 +4210,9 @@ class FederationControlScreen(ModalScreen[str | None]):
             if first.id:
                 self._render_details(first.id)
         else:
-            self.query_one("#federation-details", Static).update("No hosts match the current filter.")
+            self.query_one("#federation-details", Static).update(
+                "No hosts match the current filter."
+            )
 
     def _render_details(self, option_id: str) -> None:
         host = self._option_to_host.get(option_id)
@@ -4416,17 +4471,13 @@ class FederationControlScreen(ModalScreen[str | None]):
             return
         self._render_fleet_diff_panel(payload)
         baseline = str(payload.get("baseline", "")).strip()
-        self.notify(
-            f"Fleet diff computed{f' vs {baseline}' if baseline else ''}."
-        )
+        self.notify(f"Fleet diff computed{f' vs {baseline}' if baseline else ''}.")
 
     def action_toggle_safe_mode(self) -> None:
         self._safe_mode = not self._safe_mode
         self._refresh_cooldown_until = 0.0
         self._render_dashboard_list()
-        self.notify(
-            f"Federation safe mode {'enabled' if self._safe_mode else 'disabled'}."
-        )
+        self.notify(f"Federation safe mode {'enabled' if self._safe_mode else 'disabled'}.")
         self.action_refresh()
 
     def action_focus_local(self) -> None:
@@ -4495,9 +4546,11 @@ class InterfaceControlsScreen(ModalScreen[None]):
             f"{app.ui_theme}  |  Density: {app.density}  |  Text: {app.text_scale}\n"
             f"Layout preset: {app.density}/{app.text_scale}\n"
             "Motion: "
-            f"{app.motion_preset} (effective: {app.motion})  |  Contrast: {'on' if app.high_contrast else 'off'}\n"
+            f"{app.motion_preset} (effective: {app.motion})"
+            f"  |  Contrast: {'on' if app.high_contrast else 'off'}\n"
             "Accent: "
-            f"{app.accent_mode}  |  Hints: {app.hint_level}/{app.hint_profile}  |  Create advanced: {'on' if app.create_advanced_by_default else 'off'}\n"
+            f"{app.accent_mode}  |  Hints: {app.hint_level}/{app.hint_profile}"
+            f"  |  Create advanced: {'on' if app.create_advanced_by_default else 'off'}\n"
             f"Adaptive contrast: {'on' if app.auto_contrast else 'off'}"
         )
 
@@ -5380,7 +5433,8 @@ class SearchOutputScreen(ModalScreen[None]):
                 Option(
                     "Why empty: "
                     + message
-                    + "  |  Primary action: broaden keywords.  |  Secondary shortcut: Esc to close.",
+                    + "  |  Primary action: broaden keywords."
+                    + "  |  Secondary shortcut: Esc to close.",
                     id="search-output-empty",
                     disabled=True,
                 )
@@ -5515,7 +5569,9 @@ class TriageWizardScreen(ModalScreen[str | None]):
             step_label.update("Step 1/3 · Select warning session")
             for index, session in enumerate(self.warning_sessions):
                 marker = "-> " if index == self.selected_index else "   "
-                title = self.notices.get(session.name).title if session.name in self.notices else "-"
+                title = (
+                    self.notices.get(session.name).title if session.name in self.notices else "-"
+                )
                 options.add_option(
                     Option(
                         f"{marker}{session.display_name or session.name}  [{title}]",
@@ -5538,7 +5594,11 @@ class TriageWizardScreen(ModalScreen[str | None]):
                 preview = self.service.inspect(selected.name).preview.strip()
             excerpt = "\n".join(preview.splitlines()[-4:]) if preview else "No output captured."
             options.add_option(
-                Option("Review warning evidence below, then continue.", id="triage-inspect", disabled=True)
+                Option(
+                    "Review warning evidence below, then continue.",
+                    id="triage-inspect",
+                    disabled=True,
+                )
             )
             detail.update(
                 f"Session: {selected.display_name or selected.name}\n"
@@ -5558,7 +5618,9 @@ class TriageWizardScreen(ModalScreen[str | None]):
                 id=f"triage-open-manage:{selected.name}",
             )
         )
-        options.add_option(Option("Open health alerts cockpit", id=f"triage-open-health:{selected.name}"))
+        options.add_option(
+            Option("Open health alerts cockpit", id=f"triage-open-health:{selected.name}")
+        )
         options.add_option(Option("Apply warning filter only", id="triage-filter-only"))
         options.highlighted = 0
         detail.update(
@@ -5972,9 +6034,11 @@ class WsCommandProvider(Provider):
         app = self.app
         for display, help_text, command in self._commands():
             if isinstance(app, WsApp):
+
                 def wrapped(command=command, display=display) -> object:
                     app._track_palette_action(display)
                     return command()
+
                 yield DiscoveryHit(display, wrapped, help=help_text)
             else:
                 yield DiscoveryHit(display, command, help=help_text)
@@ -6007,9 +6071,11 @@ class WsCommandProvider(Provider):
                 continue
             boost = app._palette_rank(display) if isinstance(app, WsApp) else 0
             if isinstance(app, WsApp):
+
                 def wrapped(command=command, display=display) -> object:
                     app._track_palette_action(display)
                     return command()
+
                 yield Hit(combined + boost, matcher.highlight(display), wrapped, help=help_text)
             else:
                 yield Hit(combined, matcher.highlight(display), command, help=help_text)
@@ -6224,10 +6290,14 @@ class WsApp(App[str | None]):
             "yes",
             "on",
         }
-        low_terminal_capability = os.environ.get("TERM", "").strip().lower() in {
-            "dumb",
-            "unknown",
-        } or self.ascii_only
+        low_terminal_capability = (
+            os.environ.get("TERM", "").strip().lower()
+            in {
+                "dumb",
+                "unknown",
+            }
+            or self.ascii_only
+        )
         self._base_motion = (
             "off"
             if no_animation
@@ -6644,11 +6714,21 @@ class WsApp(App[str | None]):
         with Horizontal(id="workspace"):
             with Vertical(id="session-pane"):
                 with Horizontal(id="session-toolbar"):
-                    yield Button("+ Create", id="toolbar-create", classes="button-primary", compact=True)
-                    yield Button("Resume", id="toolbar-resume", classes="button-secondary", compact=True)
-                    yield Button("Filter", id="toolbar-filter", classes="button-secondary", compact=True)
-                    yield Button("Group", id="toolbar-group", classes="button-secondary", compact=True)
-                    yield Button("Health", id="toolbar-health", classes="button-secondary", compact=True)
+                    yield Button(
+                        "+ Create", id="toolbar-create", classes="button-primary", compact=True
+                    )
+                    yield Button(
+                        "Resume", id="toolbar-resume", classes="button-secondary", compact=True
+                    )
+                    yield Button(
+                        "Filter", id="toolbar-filter", classes="button-secondary", compact=True
+                    )
+                    yield Button(
+                        "Group", id="toolbar-group", classes="button-secondary", compact=True
+                    )
+                    yield Button(
+                        "Health", id="toolbar-health", classes="button-secondary", compact=True
+                    )
                 yield Static("", id="session-toolbar-meta")
                 yield OptionList(id="sessions")
             with Vertical(id="detail-pane"):
@@ -6877,7 +6957,8 @@ class WsApp(App[str | None]):
             return
         self._theme_recommendation_sent = True
         self._notify_grouped(
-            "Terminal capability looks limited. Recommended: enable high contrast (C) and safe accent (A).",
+            "Terminal capability looks limited. Recommended: "
+            "enable high contrast (C) and safe accent (A).",
             severity="information",
             title="Theme recommendation",
             window_seconds=20,
@@ -7054,7 +7135,12 @@ class WsApp(App[str | None]):
         term = os.environ.get("TERM", "").strip().lower()
         if term in {"linux", "vt100", "xterm-mono"}:
             return True
-        if self.size.width and self.size.height and self.size.width <= 80 and self.size.height <= 24:
+        if (
+            self.size.width
+            and self.size.height
+            and self.size.width <= 80
+            and self.size.height <= 24
+        ):
             return True
         color_term = os.environ.get("COLORTERM", "").strip().lower()
         if "truecolor" in color_term or "24bit" in color_term:
@@ -7593,9 +7679,7 @@ class WsApp(App[str | None]):
             sessions = []
             error = str(exc)
         elapsed_ms = max(0.1, (perf_counter() - started_at) * 1000)
-        self.call_from_thread(
-            self._finish_session_refresh, generation, sessions, error, elapsed_ms
-        )
+        self.call_from_thread(self._finish_session_refresh, generation, sessions, error, elapsed_ms)
 
     def _finish_session_refresh(
         self,
@@ -7754,7 +7838,8 @@ class WsApp(App[str | None]):
         line_count = len(preview_text.splitlines())
         truncated = "truncated" if preview_truncated else "complete"
         self.query_one("#output-meta", Static).update(
-            f"{self.output_mode.title()}  {line_count} lines  {truncated}  sanitized  l open full logs"
+            f"{self.output_mode.title()}  {line_count} lines  {truncated}  "
+            "sanitized  l open full logs"
         )
 
     def _activity_spark_for(self, session: SessionView) -> str:
@@ -7904,10 +7989,7 @@ class WsApp(App[str | None]):
         )
 
     def _spinner_glyph(self) -> str:
-        if self.ascii_only:
-            frames = ("-", "\\", "|", "/")
-        else:
-            frames = ("◐", "◓", "◑", "◒")
+        frames = ("-", "\\", "|", "/") if self.ascii_only else ("◐", "◓", "◑", "◒")
         return frames[self._spinner_phase % len(frames)]
 
     def _attention_label(self) -> str:
@@ -8027,7 +8109,8 @@ class WsApp(App[str | None]):
             marker = "..." if self.ascii_only else "⋯"
             options.add_option(
                 self._heading_option(
-                    f"{marker} Showing {rendered} of {len(matched_sessions)} sessions; refine filters to narrow results"
+                    f"{marker} Showing {rendered} of {len(matched_sessions)} sessions; "
+                    "refine filters to narrow results"
                 )
             )
 
@@ -8112,8 +8195,8 @@ class WsApp(App[str | None]):
                 if warnings == 0
                 else f"{warnings} warning{'s' if warnings != 1 else ''}"
             )
-        latency_ms = int(round(self._refresh_latency_ema_ms)) if self._refresh_latency_ema_ms else 0
-        render_ms = int(round(self._render_stats_ms)) if self._render_stats_ms else 0
+        latency_ms = round(self._refresh_latency_ema_ms) if self._refresh_latency_ema_ms else 0
+        render_ms = round(self._render_stats_ms) if self._render_stats_ms else 0
         capability = self._terminal_capability_badge()
         perf_text = (
             f"perf {self._effective_profile}"
@@ -8263,26 +8346,33 @@ class WsApp(App[str | None]):
                 if concise
                 else (
                     f"{navigation} Nav   Enter Open   {create_hint}   "
-                    "Space Mark   Ctrl+A Mark all   Ctrl+U Clear marks   b Bulk   1-6 Quick filters   f Filter   g Group   h Health   ? Help"
+                    "Space Mark   Ctrl+A Mark all   Ctrl+U Clear marks   b Bulk"
+                    "   1-6 Quick filters   f Filter   g Group   h Health   ? Help"
                 )
             )
         elif self.has_class("medium"):
             value = (
-                f"{navigation}  Enter Attach  {create_hint}  / Search  f Filter  d Manage  ? shortcuts"
+                f"{navigation}  Enter Attach  {create_hint}  / Search"
+                "  f Filter  d Manage  ? shortcuts"
                 if concise
                 else (
                     f"{navigation} Nav   Enter Attach   {create_hint}   o Presets   "
-                    "/ Search   Space Mark   Ctrl+A Mark all   Ctrl+U Clear marks   b Bulk   1-6 Quick filters   f Filter   "
+                    "/ Search   Space Mark   Ctrl+A Mark all   Ctrl+U Clear marks   b Bulk"
+                    "   1-6 Quick filters   f Filter   "
                     "g Group   h Health   d Manage   ? Help"
                 )
             )
         else:
             value = (
-                f"{navigation}  Enter Attach  {create_hint}  / Search  p Palette  d Manage  ? shortcuts"
+                f"{navigation}  Enter Attach  {create_hint}  / Search"
+                "  p Palette  d Manage  ? shortcuts"
                 if concise
                 else (
-                    f"{navigation} Navigate   Enter Attach   {create_hint}   o Presets   / Search   "
-                    "Space Mark   Ctrl+A Mark all   Ctrl+U Clear   Alt+I Invert   b Bulk   1-6 Quick filters   f Filter   g Group   z Density   w Text   h Health   p Palette   d Manage   i Timeline   ? Help"
+                    f"{navigation} Navigate   Enter Attach   {create_hint}"
+                    "   o Presets   / Search   "
+                    "Space Mark   Ctrl+A Mark all   Ctrl+U Clear   Alt+I Invert   b Bulk"
+                    "   1-6 Quick filters   f Filter   g Group   z Density   w Text"
+                    "   h Health   p Palette   d Manage   i Timeline   ? Help"
                 )
             )
         if self._shortcut_pulse:
@@ -8374,7 +8464,11 @@ class WsApp(App[str | None]):
             self.query_one("#overview", Static).update(
                 f"Checked {scanned} of {eligible} eligible agent sessions."
                 if checking
-                else "Why empty: no warning or blocked sessions match the attention view.\nPrimary action: press f to inspect all sessions.\nSecondary shortcut: press r to refresh signal scans."
+                else (
+                    "Why empty: no warning or blocked sessions match the attention view.\n"
+                    "Primary action: press f to inspect all sessions.\n"
+                    "Secondary shortcut: press r to refresh signal scans."
+                )
             )
             for widget_id in ("#runtime-status", "#activity", "#recent-output"):
                 self.query_one(widget_id, Static).update("")
@@ -8387,7 +8481,9 @@ class WsApp(App[str | None]):
         if not self.tmux_connected:
             self.query_one("#identity", Static).update("Runtime disconnected")
             self.query_one("#overview", Static).update(
-                "Why empty: ws cannot read tmux sessions right now.\nPrimary action: press h to open health details.\nSecondary shortcut: press r to retry connection."
+                "Why empty: ws cannot read tmux sessions right now.\n"
+                "Primary action: press h to open health details.\n"
+                "Secondary shortcut: press r to retry connection."
             )
             for widget_id in ("#runtime-status", "#activity", "#recent-output"):
                 self.query_one(widget_id, Static).update("")
@@ -8398,9 +8494,15 @@ class WsApp(App[str | None]):
             return
         self.query_one("#identity", Static).update("No matches" if filtered else "No sessions")
         self.query_one("#overview", Static).update(
-            "Why empty: active query/filter excludes all managed sessions.\nPrimary action: press Esc to clear search or press f to revise filters.\nSecondary shortcut: press 1 for All sessions."
+            "Why empty: active query/filter excludes all managed sessions.\n"
+            "Primary action: press Esc to clear search or press f to revise filters.\n"
+            "Secondary shortcut: press 1 for All sessions."
             if filtered
-            else "Why empty: no managed sessions exist yet.\nPrimary action: press c to create a session.\nSecondary shortcut: press o to launch from a preset."
+            else (
+                "Why empty: no managed sessions exist yet.\n"
+                "Primary action: press c to create a session.\n"
+                "Secondary shortcut: press o to launch from a preset."
+            )
         )
         for widget_id in ("#runtime-status", "#activity", "#recent-output"):
             self.query_one(widget_id, Static).update("")
@@ -8505,7 +8607,8 @@ class WsApp(App[str | None]):
                 (
                     display_state(session.runtime.value),
                     display_state(session.task_state.value),
-                    f"Last active {relative_activity(session.last_active_at, now=self._now_utc())} ago",
+                    "Last active "
+                    f"{relative_activity(session.last_active_at, now=self._now_utc())} ago",
                 )
             ),
             runtime_style(session.runtime, monochrome=self.monochrome),
@@ -8598,7 +8701,9 @@ class WsApp(App[str | None]):
             identity = (self.selected_name, self.selected_session_id)
         if identity is not None:
             fallback_notice = (
-                detect_activity(selected, "") if selected is not None else ActivityNotice(
+                detect_activity(selected, "")
+                if selected is not None
+                else ActivityNotice(
                     "neutral",
                     "No action required",
                     "Session can continue normally.",
@@ -8836,7 +8941,9 @@ class WsApp(App[str | None]):
         self._set_quick_filter("warnings")
         self._pulse_shortcut_hint("Macro: warnings filter applied, opening logs")
         if not self.visible_sessions:
-            self._notify_grouped("Macro stopped: no warning sessions available.", severity="warning")
+            self._notify_grouped(
+                "Macro stopped: no warning sessions available.", severity="warning"
+            )
             return
         target = self.visible_sessions[0]
         self.selected_name = target.name
@@ -8977,21 +9084,25 @@ class WsApp(App[str | None]):
             )
             if session is None:
                 continue
-            def _run() -> None:
+
+            def _run(current_session: SessionView = session) -> None:
                 if action_id == "bulk-pin":
-                    self.service.organize(session.name, pinned=True)
+                    self.service.organize(current_session.name, pinned=True)
                 elif action_id == "bulk-unpin":
-                    self.service.organize(session.name, pinned=False)
+                    self.service.organize(current_session.name, pinned=False)
                 elif action_id == "bulk-logging-on":
-                    self.service.set_logging(session.name, True)
+                    self.service.set_logging(current_session.name, True)
                 elif action_id == "bulk-logging-off":
-                    self.service.set_logging(session.name, False)
+                    self.service.set_logging(current_session.name, False)
                 elif action_id == "bulk-stop-command":
-                    self.service.stop_command(session.name)
+                    self.service.stop_command(current_session.name)
                 elif action_id == "bulk-handoff":
-                    details = self.service.inspect(session.name)
+                    details = self.service.inspect(current_session.name)
+                    preview_tail = (
+                        details.preview.splitlines()[-1] if details.preview else "no output"
+                    )
                     self.notify(
-                        f"{session.name}: {details.preview.splitlines()[-1] if details.preview else 'no output'}",
+                        f"{current_session.name}: {preview_tail}",
                         timeout=4,
                     )
 
@@ -9155,7 +9266,8 @@ class WsApp(App[str | None]):
         self._render_options()
         self._persist_interface_preferences()
         self.notify(
-            f"Theme: {self.ui_theme} (accent: {self.accent_mode}, contrast: {'on' if self.high_contrast else 'off'})"
+            f"Theme: {self.ui_theme} (accent: {self.accent_mode}, "
+            f"contrast: {'on' if self.high_contrast else 'off'})"
         )
 
     def action_escape(self) -> None:
@@ -9390,8 +9502,7 @@ class WsApp(App[str | None]):
         self.create_advanced_by_default = not self.create_advanced_by_default
         self._persist_interface_preferences()
         self.notify(
-            "Create advanced default: "
-            + ("on" if self.create_advanced_by_default else "off")
+            "Create advanced default: " + ("on" if self.create_advanced_by_default else "off")
         )
 
     def action_toggle_auto_contrast(self) -> None:
@@ -9498,6 +9609,7 @@ class WsApp(App[str | None]):
                 automatic_prefix=result.request.automatic_prefix,
             )
         try:
+
             def _create() -> None:
                 nonlocal session
                 session = self.service.create(result.request)
@@ -9589,9 +9701,7 @@ class WsApp(App[str | None]):
                 IdentityOrganizationScreen(
                     self.service,
                     session,
-                    draft=self._load_form_draft(
-                        f"identity:{session.name}:{session.session_id}"
-                    ),
+                    draft=self._load_form_draft(f"identity:{session.name}:{session.session_id}"),
                 ),
                 lambda result, target=session: self._save_identity(result, target),
             )
@@ -9891,9 +10001,7 @@ class WsApp(App[str | None]):
             IdentityOrganizationScreen(
                 self.service,
                 current,
-                draft=self._load_form_draft(
-                    f"identity:{current.name}:{current.session_id}"
-                ),
+                draft=self._load_form_draft(f"identity:{current.name}:{current.session_id}"),
             ),
             lambda result, target=current, context=state: self._save_identity(
                 result, target, context
@@ -10221,16 +10329,23 @@ class WsApp(App[str | None]):
         generated = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
         destination = self.service.paths.diagnostics_dir / f"ops-report-{generated}.txt"
         destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        warnings = [check for check in health if check.status in {HealthStatus.WARN, HealthStatus.FAIL}]
+        warnings = [
+            check for check in health if check.status in {HealthStatus.WARN, HealthStatus.FAIL}
+        ]
+        attached_count = sum(item.runtime is RuntimeState.ATTACHED for item in sessions)
+        detached_count = sum(item.runtime is RuntimeState.DETACHED for item in sessions)
+        stopped_count = sum(
+            item.runtime in {RuntimeState.STOPPED, RuntimeState.FAILED} for item in sessions
+        )
         payload = [
             "WORKSPACE OPERATIONS REPORT",
             f"Generated: {datetime.now().astimezone().isoformat(timespec='seconds')}",
             "",
             (
                 f"Sessions: {len(sessions)} total | "
-                f"{sum(item.runtime is RuntimeState.ATTACHED for item in sessions)} attached | "
-                f"{sum(item.runtime is RuntimeState.DETACHED for item in sessions)} detached | "
-                f"{sum(item.runtime in {RuntimeState.STOPPED, RuntimeState.FAILED} for item in sessions)} stopped"
+                f"{attached_count} attached | "
+                f"{detached_count} detached | "
+                f"{stopped_count} stopped"
             ),
             f"Warnings: {len(warnings)}",
             "",
@@ -10333,11 +10448,7 @@ class WsApp(App[str | None]):
                     self.query_one("#search", Input).value = ""
                 self._render_options()
                 target = next(
-                    (
-                        session
-                        for session in self.visible_sessions
-                        if session.name in set(related)
-                    ),
+                    (session for session in self.visible_sessions if session.name in set(related)),
                     None,
                 )
                 if target is not None:
@@ -10359,9 +10470,13 @@ class WsApp(App[str | None]):
         target_name, _, follow_up = payload.partition(":")
         if not target_name:
             return
-        target = next((session for session in self.visible_sessions if session.name == target_name), None)
+        target = next(
+            (session for session in self.visible_sessions if session.name == target_name), None
+        )
         if target is None:
-            target = next((session for session in self.sessions if session.name == target_name), None)
+            target = next(
+                (session for session in self.sessions if session.name == target_name), None
+            )
         if target is None:
             self.notify(f"Local session not found: {target_name}", severity="warning")
             return
@@ -10392,7 +10507,8 @@ class WsApp(App[str | None]):
             "v        Open policy sandbox\n"
             "D        Open dependency graph\n"
             "F        Open federation control center\n"
-            "         (Enter local focus; w warning focus; m/l actions; 5/6/7 views; 8 diff; 9 safe mode)\n"
+            "         (Enter local focus; w warning focus; m/l actions;\n"
+            "          5/6/7 views; 8 diff; 9 safe mode)\n"
             "M/C/A    Motion/contrast/accent controls\n"
             "W        Open warning triage wizard\n"
             "p        Command palette\n"
@@ -10419,7 +10535,8 @@ class WsApp(App[str | None]):
             "v        Open policy sandbox\n"
             "D        Open dependency graph\n"
             "F        Open federation control center\n"
-            "         (Enter local focus; w warning focus; m/l actions; 5/6/7 views; 8 diff; 9 safe mode)\n"
+            "         (Enter local focus; w warning focus; m/l actions;\n"
+            "          5/6/7 views; 8 diff; 9 safe mode)\n"
             "B        Show project board lanes\n"
             "U        Undo last risky action\n"
             "W        Open warning triage wizard\n"

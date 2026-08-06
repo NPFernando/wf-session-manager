@@ -110,7 +110,7 @@ class InterfacePreferences(BaseModel):
     create_advanced_by_default: bool = False
     hint_level: Literal["minimal", "verbose"] = "minimal"
     hint_profile: Literal["beginner", "advanced"] = "advanced"
-    project_profiles: dict[str, "ProjectVisualProfile"] = Field(default_factory=dict)
+    project_profiles: dict[str, ProjectVisualProfile] = Field(default_factory=dict)
 
 
 class ProjectVisualProfile(BaseModel):
@@ -359,9 +359,7 @@ class FilterPreset(BaseModel):
     warnings_only: bool = False
     recent_only: bool = False
     quick_filter: Literal["all", "active", "detached", "warnings", "stopped", "blocked"] = "all"
-    grouping: Literal["attention", "runtime", "agent", "project", "warning", "recent"] | None = (
-        None
-    )
+    grouping: Literal["attention", "runtime", "agent", "project", "warning", "recent"] | None = None
     density: Literal["compact", "comfortable"] | None = None
 
 

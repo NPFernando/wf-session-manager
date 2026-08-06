@@ -168,6 +168,8 @@ def _display_safe(text: str) -> str:
     "[/bold]"-shaped substring otherwise raises MarkupError, and terminal
     escape sequences would otherwise render live."""
     return escape_markup(sanitize_terminal(text))
+
+
 migration_app = typer.Typer(help="Preview, apply, inspect, and roll back session adoption.")
 app.add_typer(migration_app, name="migrate")
 preset_app = typer.Typer(help="Save, list, and delete create-session presets.")
@@ -435,7 +437,9 @@ def timeline_command(
     table.add_column("Action")
     table.add_column("Detail")
     for event in events:
-        table.add_row(event.timestamp.isoformat(timespec="seconds"), event.action, event.detail or "-")
+        table.add_row(
+            event.timestamp.isoformat(timespec="seconds"), event.action, event.detail or "-"
+        )
     console.print(table)
 
 
@@ -471,9 +475,8 @@ def handoff_command(
     console.print(f"Next action: {payload['next_action']}")
     console.rule("Recent timeline")
     for event in events:
-        console.print(
-            f"{event.timestamp.isoformat(timespec='seconds')}  {event.action}  {_display_safe(event.detail)}"
-        )
+        timestamp = event.timestamp.isoformat(timespec="seconds")
+        console.print(f"{timestamp}  {event.action}  {_display_safe(event.detail)}")
     console.rule("Recent output")
     console.print(_display_safe(details.preview) if details.preview else "No output")
 
@@ -498,9 +501,8 @@ def handoff_auto_command(
     console.print(f"Project filter: {project or 'all'}")
     for session in payload["sessions"]:
         assert isinstance(session, dict)
-        console.print(
-            f"- {session['name']} | {session['runtime']} | {session['task']} | {session['summary'] or '-'}"
-        )
+        summary = session["summary"] or "-"
+        console.print(f"- {session['name']} | {session['runtime']} | {session['task']} | {summary}")
 
 
 @incident_app.command("start")
@@ -531,7 +533,9 @@ def incident_start_command(
     if as_json:
         typer.echo(json.dumps(payload, indent=2))
         return
-    console.print(f"Incident opened: [bold]{payload.get('id','')}[/bold] ({payload.get('severity','')})")
+    console.print(
+        f"Incident opened: [bold]{payload.get('id', '')}[/bold] ({payload.get('severity', '')})"
+    )
 
 
 @incident_app.command("status")
@@ -549,9 +553,11 @@ def incident_status_command(
             if as_json:
                 typer.echo(json.dumps(payload, indent=2))
                 return
-            console.print(
-                f"{payload.get('id')} | {payload.get('status')} | {payload.get('severity')} | {payload.get('title')}"
+            header = (
+                f"{payload.get('id')} | {payload.get('status')} | "
+                f"{payload.get('severity')} | {payload.get('title')}"
             )
+            console.print(header)
             console.print(_display_safe(str(payload.get("summary", "")) or "-"))
             return
         rows = service.list_incidents(status=status)
@@ -611,7 +617,7 @@ def incident_update_command(
     if as_json:
         typer.echo(json.dumps(payload, indent=2))
         return
-    console.print(f"Incident updated: [bold]{payload.get('id','')}[/bold]")
+    console.print(f"Incident updated: [bold]{payload.get('id', '')}[/bold]")
 
 
 @incident_app.command("close")
@@ -631,7 +637,7 @@ def incident_close_command(
     if as_json:
         typer.echo(json.dumps(payload, indent=2))
         return
-    console.print(f"Incident closed: [bold]{payload.get('id','')}[/bold]")
+    console.print(f"Incident closed: [bold]{payload.get('id', '')}[/bold]")
 
 
 @app.command("incident-bundle")
@@ -754,11 +760,7 @@ def create(
 ) -> None:
     """Create a detached, persistent ws-owned session."""
     if sum(int(value is not None) for value in (from_preset, from_session, from_template)) > 1:
-        abort(
-            WsError(
-                "--from-preset, --from-session, and --from-template cannot be combined"
-            )
-        )
+        abort(WsError("--from-preset, --from-session, and --from-template cannot be combined"))
         return
     service = runtime_from_context(context).service()
     template: Preset | SessionView | None = None
@@ -789,19 +791,30 @@ def create(
     except WsError as error:
         abort(error)
         return
-    resolved_tool = tool if tool is not None else (
-        rendered["tool"] if rendered else (template.tool if template else default_enabled_tool(service.config))
+    resolved_tool = (
+        tool
+        if tool is not None
+        else (
+            rendered["tool"]
+            if rendered
+            else (template.tool if template else default_enabled_tool(service.config))
+        )
     )
     if resolved_tool is None:
         abort(
             WsError(
-                "no enabled tool profiles are configured; "
-                "enable at least one tool in config.toml"
+                "no enabled tool profiles are configured; enable at least one tool in config.toml"
             )
         )
         return
-    resolved_cwd = cwd if cwd is not None else (
-        Path(str(rendered["cwd"])).expanduser() if rendered else (template.cwd if template else Path.cwd())
+    resolved_cwd = (
+        cwd
+        if cwd is not None
+        else (
+            Path(str(rendered["cwd"])).expanduser()
+            if rendered
+            else (template.cwd if template else Path.cwd())
+        )
     )
     resolved_name = name if name else (str(rendered["name"]) if rendered else "")
     if not resolved_name:
@@ -811,14 +824,19 @@ def create(
         name=resolved_name,
         tool=resolved_tool,
         cwd=resolved_cwd.expanduser().resolve(),
-        project=project or (str(rendered["project"]) if rendered else (template.project if template else "")),
+        project=project
+        or (str(rendered["project"]) if rendered else (template.project if template else "")),
         note=note or (str(rendered["note"]) if rendered else ""),
-        tags=tag if tag is not None else (
-            list(rendered["tags"]) if rendered else (list(template.tags) if template else [])
-        ),
+        tags=tag
+        if tag is not None
+        else (list(rendered["tags"]) if rendered else (list(template.tags) if template else [])),
         logging_enabled=logging
         if logging is not None
-        else (bool(rendered["logging_enabled"]) if rendered else (template.logging_enabled if template else True)),
+        else (
+            bool(rendered["logging_enabled"])
+            if rendered
+            else (template.logging_enabled if template else True)
+        ),
     )
     try:
         session = service.create(request, dry_run=dry_run)
@@ -1167,7 +1185,7 @@ def federation_dashboard_open(
             _display_safe(str(error or "ok")),
         )
     console.print(
-        f"Opened federation dashboard: [bold]{dashboard.get('name','')}[/bold] "
+        f"Opened federation dashboard: [bold]{dashboard.get('name', '')}[/bold] "
         f"({len(hosts)} host(s))"
     )
     console.print(table)
@@ -1190,7 +1208,7 @@ def fleet_snapshot_save(
         typer.echo(json.dumps(snapshot, indent=2))
         return
     console.print(
-        f"Saved fleet snapshot: [bold]{snapshot.get('name','')}[/bold] "
+        f"Saved fleet snapshot: [bold]{snapshot.get('name', '')}[/bold] "
         f"({len(snapshot.get('hosts', []))} host(s))"
     )
 
@@ -1224,12 +1242,14 @@ def fleet_diff_command(
     left: Annotated[str, typer.Option("--left", help="Baseline fleet snapshot name.")],
     right: Annotated[
         str,
-        typer.Option("--right", help="Comparison fleet snapshot name. If omitted, compares to live."),
+        typer.Option(
+            "--right", help="Comparison fleet snapshot name. If omitted, compares to live."
+        ),
     ] = "",
     host: Annotated[list[str] | None, typer.Option("--host")] = None,
     as_json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Compare fleet snapshots across time, and highlight cross-host drift in the comparison side."""
+    """Compare fleet snapshots over time and highlight cross-host drift in the comparison side."""
     service = runtime_from_context(context).service()
     try:
         payload = service.fleet_diff(left=left, right=right, hosts=tuple(host or ()))
@@ -1244,9 +1264,9 @@ def fleet_diff_command(
     anomalies = payload.get("anomalies", [])
     left_meta = payload.get("left", {})
     right_meta = payload.get("right", {})
-    console.print(
-        f"Fleet diff: [bold]{left_meta.get('name','left')}[/bold] -> [bold]{right_meta.get('name','right')}[/bold]"
-    )
+    left_name = left_meta.get("name", "left")
+    right_name = right_meta.get("name", "right")
+    console.print(f"Fleet diff: [bold]{left_name}[/bold] -> [bold]{right_name}[/bold]")
     console.print(
         f"Host drift items: {len(drifts)} | Cross-host spread signals: {len(spread)} | "
         f"Anomalies: {len(anomalies)}"
@@ -1421,9 +1441,7 @@ def profile_active(
         return
     console.print(f"Name: [bold]{payload.get('name', '-')}[/bold]")
     console.print(f"Default project: {payload.get('default_project', '-') or '-'}")
-    console.print(
-        f"Require approvals: {'yes' if payload.get('require_approvals') else 'no'}"
-    )
+    console.print(f"Require approvals: {'yes' if payload.get('require_approvals') else 'no'}")
     actions = payload.get("allowed_actions") or []
     console.print(f"Allowed actions: {', '.join(str(item) for item in actions) or '*'}")
 
@@ -1514,7 +1532,12 @@ def policy_simulate_command(
 @approval_app.command("issue")
 def approval_issue_command(
     context: typer.Context,
-    action: Annotated[str, typer.Argument(help="Guarded action context, e.g. delete or federation-action:resume:vm-a.")],
+    action: Annotated[
+        str,
+        typer.Argument(
+            help="Guarded action context, e.g. delete or federation-action:resume:vm-a."
+        ),
+    ],
     operator: Annotated[str, typer.Option("--operator")] = "",
     ttl: Annotated[int | None, typer.Option("--ttl", min=30, max=86400)] = None,
     as_json: Annotated[bool, typer.Option("--json")] = False,
@@ -1539,7 +1562,15 @@ def approval_issue_command(
 @app.command("search")
 def unified_search_command(
     context: typer.Context,
-    query: Annotated[str | None, typer.Argument(help="Query text; supports facets like tool:copilot project:api state:blocked tag:backend.")] = None,
+    query: Annotated[
+        str | None,
+        typer.Argument(
+            help=(
+                "Query text; supports facets like "
+                "tool:copilot project:api state:blocked tag:backend."
+            )
+        ),
+    ] = None,
     saved: Annotated[str | None, typer.Option("--saved", help="Run a saved query by name.")] = None,
     limit: Annotated[int, typer.Option("--limit")] = 50,
     as_json: Annotated[bool, typer.Option("--json")] = False,
@@ -1720,7 +1751,9 @@ def playbook_list_command(
     table.add_column("Match any")
     for row in rows:
         commands = row.get("commands", [])
-        command_preview = "; ".join(" ".join(str(part) for part in command) for command in commands[:2])
+        command_preview = "; ".join(
+            " ".join(str(part) for part in command) for command in commands[:2]
+        )
         if len(commands) > 2:
             command_preview += f" (+{len(commands) - 2})"
         table.add_row(
@@ -1785,9 +1818,9 @@ def chaos_check_command(
     if as_json:
         typer.echo(json.dumps(payload, indent=2))
         return
-    console.print(
-        f"Warnings: {len(payload.get('warnings', []))} | Failures: {len(payload.get('failures', []))}"
-    )
+    warnings_count = len(payload.get("warnings", []))
+    failures_count = len(payload.get("failures", []))
+    console.print(f"Warnings: {warnings_count} | Failures: {failures_count}")
     for artifact in payload.get("artifacts", []):
         console.print(f"Artifact: {artifact}")
 
@@ -2098,9 +2131,8 @@ def bulk_command(
                 service.stop_command(name)
             elif export_handoff:
                 details = service.inspect(name)
-                console.print(
-                    f"{name}: {_display_safe(details.preview.splitlines()[-1] if details.preview else 'no output')}"
-                )
+                preview_tail = details.preview.splitlines()[-1] if details.preview else "no output"
+                console.print(f"{name}: {_display_safe(preview_tail)}")
         except WsError as error:
             abort(error)
             return
@@ -2181,7 +2213,7 @@ def federation_action_command(
     context: typer.Context,
     action: Annotated[str, typer.Argument(help="list|resume|health|report|attach")],
     host: Annotated[list[str] | None, typer.Option("--host")] = None,
-    arg: Annotated[list[str] | None, typer.Option("--arg", help="Extra remote argument.")]=None,
+    arg: Annotated[list[str] | None, typer.Option("--arg", help="Extra remote argument.")] = None,
     approval: Annotated[
         str | None,
         typer.Option("--approval", help="Approval code for guarded remote actions."),
@@ -2225,8 +2257,10 @@ def federation_action_command(
     table.add_column("Attempts")
     table.add_column("Result")
     for row in rows:
-        result = row.get("stdout", "") if row.get("ok") else (
-            row.get("failure_summary", "") or row.get("error", "")
+        result = (
+            row.get("stdout", "")
+            if row.get("ok")
+            else (row.get("failure_summary", "") or row.get("error", ""))
         )
         table.add_row(
             str(row.get("host", "")),
@@ -2237,11 +2271,13 @@ def federation_action_command(
     console.print(table)
     failures = [row for row in rows if not row.get("ok")]
     if failures and len(failures) < len(rows):
-        failure_reasons = ", ".join(
-            f"{row.get('host')}: {_display_safe(str(row.get('failure_summary') or row.get('error') or 'failed'))}"
+        preview_failures = [
+            f"{row.get('host')}: "
+            f"{_display_safe(str(row.get('failure_summary') or row.get('error') or 'failed'))}"
             for row in failures[:3]
-        )
-        console.print(f"Partial success: {len(rows)-len(failures)}/{len(rows)} hosts succeeded.")
+        ]
+        failure_reasons = ", ".join(preview_failures)
+        console.print(f"Partial success: {len(rows) - len(failures)}/{len(rows)} hosts succeeded.")
         console.print(f"Failures: {failure_reasons}")
 
 
@@ -2310,7 +2346,8 @@ def federation_capabilities_command(
             host_name,
             session_count,
             (
-                f"{len(command_supported)}/{len(command_supported) + len(command_missing)} supported"
+                f"{len(command_supported)}/"
+                f"{len(command_supported) + len(command_missing)} supported"
                 + (f" ({', '.join(sorted(command_supported))})" if command_supported else "")
             ),
             (
@@ -2367,8 +2404,7 @@ def federation_action_plan_command(
     )
     if approval_state.get("required"):
         console.print(
-            "Approval: "
-            + ("satisfied" if approval_state.get("satisfied") else "missing")
+            "Approval: " + ("satisfied" if approval_state.get("satisfied") else "missing")
         )
         missing = approval_state.get("missing_contexts", [])
         if missing:
@@ -2406,21 +2442,13 @@ def report_command(
             if check.status in {HealthStatus.WARN, HealthStatus.FAIL}
         ],
         "stale_sessions": sorted(
-            (
-                session.name
-                for session in sessions
-                if session.runtime is RuntimeState.DETACHED
-                and session.last_active_at is not None
-                and (datetime.now(session.last_active_at.tzinfo) - session.last_active_at).days >= 7
-            )
+            session.name
+            for session in sessions
+            if session.runtime is RuntimeState.DETACHED
+            and session.last_active_at is not None
+            and (datetime.now(session.last_active_at.tzinfo) - session.last_active_at).days >= 7
         )[:20],
-        "top_projects": sorted(
-            {
-                session.project
-                for session in sessions
-                if session.project
-            }
-        )[:10],
+        "top_projects": sorted({session.project for session in sessions if session.project})[:10],
     }
     plaintext = (
         "WORKSPACE OPERATIONS REPORT\n"
@@ -2498,10 +2526,7 @@ def timeline_global_command(
     service = runtime_from_context(context).service()
     rows = service.global_timeline(action_filter=action)[: max(1, limit)]
     if as_json:
-        payload = [
-            {"session": name, **event.model_dump(mode="json")}
-            for name, event in rows
-        ]
+        payload = [{"session": name, **event.model_dump(mode="json")} for name, event in rows]
         typer.echo(json.dumps(payload, indent=2))
         return
     table = Table(show_header=True, header_style="bold cyan", box=None)
@@ -2510,7 +2535,12 @@ def timeline_global_command(
     table.add_column("Action")
     table.add_column("Detail")
     for name, event in rows:
-        table.add_row(event.timestamp.isoformat(timespec="seconds"), name, event.action, _display_safe(event.detail or "-"))
+        table.add_row(
+            event.timestamp.isoformat(timespec="seconds"),
+            name,
+            event.action,
+            _display_safe(event.detail or "-"),
+        )
     console.print(table)
 
 
@@ -2757,7 +2787,10 @@ def ux_audit_command(
     )
     add(
         "button-variant-coverage",
-        all(token in css_source for token in (".button-primary", ".button-secondary", ".button-danger")),
+        all(
+            token in css_source
+            for token in (".button-primary", ".button-secondary", ".button-danger")
+        ),
         "Primary/secondary/danger button variants detected in wf.tcss",
         "Define missing button variant classes in wf.tcss and apply them consistently.",
     )
@@ -2799,13 +2832,19 @@ def ux_audit_command(
     )
     add(
         "button-state-coverage",
-        "_run_with_button_loading" in tui_source and tui_source.count("_run_with_button_loading(") >= 4,
+        "_run_with_button_loading" in tui_source
+        and tui_source.count("_run_with_button_loading(") >= 4,
         "Button loading-state helper is defined and reused in action handlers",
-        "Wrap async-heavy button handlers with _run_with_button_loading for consistent progress feedback.",
+        (
+            "Wrap async-heavy button handlers with _run_with_button_loading "
+            "for consistent progress feedback."
+        ),
     )
     add(
         "empty-state-actionability",
-        "Why empty:" in tui_source and "Primary action:" in tui_source and "Secondary shortcut:" in tui_source,
+        "Why empty:" in tui_source
+        and "Primary action:" in tui_source
+        and "Secondary shortcut:" in tui_source,
         "Empty states include reason plus primary/secondary next steps",
         "Update empty-state copy to explain why the view is empty and what to do next.",
     )
@@ -2813,19 +2852,28 @@ def ux_audit_command(
         "button-micro-interactions",
         "button-feedback-press" in tui_source and "button-loading" in css_source,
         "Press and loading feedback classes are wired for action buttons",
-        "Add button press/loading classes and apply them during actions to improve interaction clarity.",
+        (
+            "Add button press/loading classes and apply them during actions "
+            "to improve interaction clarity."
+        ),
     )
     add(
         "palette-alias-fuzzy",
         "PALETTE_ALIASES" in tui_source and "SequenceMatcher" in tui_source,
         "Command palette alias and typo-tolerant search hooks detected",
-        "Add alias mappings and typo-tolerant ranking so palette discovery survives imperfect queries.",
+        (
+            "Add alias mappings and typo-tolerant ranking so palette "
+            "discovery survives imperfect queries."
+        ),
     )
     add(
         "layout-presets",
         "action_cycle_layout_preset" in tui_source and "interface-layout-preset" in tui_source,
         "Layout presets are available from interface controls and command palette",
-        "Expose compact/comfortable/readable layout presets for quick density+text scale switching.",
+        (
+            "Expose compact/comfortable/readable layout presets "
+            "for quick density+text scale switching."
+        ),
     )
     add(
         "accent-accessibility",
@@ -2847,7 +2895,9 @@ def ux_audit_command(
     )
     add(
         "draft-persistence",
-        "_form_drafts" in tui_source and "_save_form_draft" in tui_source and "_load_form_draft" in tui_source,
+        "_form_drafts" in tui_source
+        and "_save_form_draft" in tui_source
+        and "_load_form_draft" in tui_source,
         "Draft persistence helpers exist for form reopen flows",
         "Persist unsent form inputs and restore them on modal reopen.",
     )
@@ -2911,7 +2961,8 @@ def ux_a11y_audit_command(
     )
     add(
         "adaptive-contrast",
-        "action_toggle_auto_contrast" in tui_source and "_terminal_needs_high_contrast" in tui_source,
+        "action_toggle_auto_contrast" in tui_source
+        and "_terminal_needs_high_contrast" in tui_source,
         "Adaptive contrast checks are wired to terminal capabilities",
         "Implement terminal capability checks and adaptive contrast toggle.",
     )
@@ -2923,7 +2974,9 @@ def ux_a11y_audit_command(
     )
     add(
         "motion-reduction",
-        "motion_preset" in tui_source and "WS_NO_ANIMATION" in tui_source and "motion-off" in css_source,
+        "motion_preset" in tui_source
+        and "WS_NO_ANIMATION" in tui_source
+        and "motion-off" in css_source,
         "Motion can be reduced through presets and environment overrides",
         "Support an off preset plus environment-driven motion disable behavior.",
     )
@@ -3104,14 +3157,15 @@ def quickstart(
         except WsError as error:
             abort(error)
             return
-    selected_tool = tool if tool is not None else (
-        preset_model.tool if preset_model else default_enabled_tool(effective_config)
+    selected_tool = (
+        tool
+        if tool is not None
+        else (preset_model.tool if preset_model else default_enabled_tool(effective_config))
     )
     if selected_tool is None:
         abort(
             WsError(
-                "no enabled tool profiles are configured; "
-                "enable at least one tool in config.toml"
+                "no enabled tool profiles are configured; enable at least one tool in config.toml"
             )
         )
         return
