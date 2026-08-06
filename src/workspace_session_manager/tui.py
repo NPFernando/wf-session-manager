@@ -3318,14 +3318,13 @@ class DiagnosticsScreen(ModalScreen[None]):
         if self.running:
             return
         self.running = True
-        self.query_one("#diagnostics-loading", LoadingIndicator).display = False
+        self.query_one("#diagnostics-loading", LoadingIndicator).display = True
         self.query_one("#diagnostics-summary", Static).update(
             "Running diagnostics... Checking tmux and tool availability"
         )
         self.query_one("#diagnostics-meta", Static).update("Running now")
         for selector in ("#diagnostics-run", "#diagnostics-export", "#diagnostics-details"):
             self.query_one(selector, Button).disabled = True
-        self.set_timer(0.25, self._show_loading)
         self._run_diagnostics()
 
     @work(thread=True, exclusive=True, group="diagnostics")
@@ -6162,6 +6161,7 @@ class WsApp(App[str | None]):
     ) -> None:
         super().__init__()
         self.service = service
+        self._no_animation_requested = no_animation
         self.sessions: list[SessionView] = []
         self.visible_sessions: list[SessionView] = []
         self.show_unmanaged = False
@@ -6949,6 +6949,8 @@ class WsApp(App[str | None]):
                 self._theme_colors[key] = value
 
     def _maybe_suggest_accessible_theme(self) -> None:
+        if self.snapshot_mode or self._no_animation_requested:
+            return
         if self._theme_recommendation_sent:
             return
         if not self._terminal_needs_high_contrast():
