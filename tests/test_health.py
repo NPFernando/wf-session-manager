@@ -175,9 +175,7 @@ def test_git_dirty_repos_check_isolates_per_repo_failure(tmp_path: Path, monkeyp
     assert check.status is HealthStatus.PASS
 
 
-def _record(
-    name: str, *, last_attached_at: datetime, cwd: Path = Path("/tmp")
-) -> SessionMetadata:
+def _record(name: str, *, last_attached_at: datetime, cwd: Path = Path("/tmp")) -> SessionMetadata:
     return SessionMetadata(
         tmux_session_id="$1",
         name=name,

@@ -77,7 +77,7 @@ def test_setup_refuses_to_overwrite_existing_config_without_force(
     paths = AppPaths.discover()
     paths.config_dir.mkdir(parents=True)
     paths.config_file.write_text(
-        "[tools.claude]\ncommand = [\"claude\"]\nenabled = true\n",
+        '[tools.claude]\ncommand = ["claude"]\nenabled = true\n',
         encoding="utf-8",
     )
 
@@ -1086,9 +1086,7 @@ def test_profile_select_via_root_option(
 ) -> None:
     service.config = service.config.model_copy(
         update={
-            "operator_profiles": (
-                OperatorProfileConfig(name="ops", default_project="platform"),
-            )
+            "operator_profiles": (OperatorProfileConfig(name="ops", default_project="platform"),)
         }
     )
     monkeypatch.setattr(Runtime, "service", lambda self: service)
@@ -1282,7 +1280,9 @@ def test_incident_bundle_command_includes_federation_evidence(
     monkeypatch.setattr(
         service,
         "federated_action",
-        lambda action, hosts=None, args=(): [{"host": "vm-a", "ok": True, "error": "", "stdout": "{}"}],
+        lambda action, hosts=None, args=(): [
+            {"host": "vm-a", "ok": True, "error": "", "stdout": "{}"}
+        ],
     )
     destination = tmp_path / "incident-fed-cli-bundle.tar.gz"
 
@@ -1456,8 +1456,18 @@ def test_federation_action_plan_command_outputs_json(
         lambda action, hosts=None, args=(), approval_code="", approval_tokens=(): {
             "action": action,
             "targets": {"host_count": 1, "reachable_hosts": 1},
-            "blast_radius": {"session_count": 2, "blocked_sessions": 1, "needs_input_sessions": 0, "risk_level": "high"},
-            "approval": {"required": True, "satisfied": False, "contexts": [], "missing_contexts": ["federation-action:resume:vm-a"]},
+            "blast_radius": {
+                "session_count": 2,
+                "blocked_sessions": 1,
+                "needs_input_sessions": 0,
+                "risk_level": "high",
+            },
+            "approval": {
+                "required": True,
+                "satisfied": False,
+                "contexts": [],
+                "missing_contexts": ["federation-action:resume:vm-a"],
+            },
             "hosts": [{"host": "vm-a"}],
         },
     )
@@ -1539,7 +1549,9 @@ def test_fleet_snapshot_and_fleet_diff_commands_output_json(
             "left": {"name": left, "created_at": "2026-08-06T00:00:00+00:00"},
             "right": {"name": right or "live", "created_at": "2026-08-06T01:00:00+00:00"},
             "hosts": ["vm-a"],
-            "drifts": [{"host": "vm-a", "field": "session_count", "left": 1, "right": 2, "delta": 1}],
+            "drifts": [
+                {"host": "vm-a", "field": "session_count", "left": 1, "right": 2, "delta": 1}
+            ],
             "host_spread": [],
         },
     )
@@ -1630,7 +1642,8 @@ def test_incident_and_approval_commands_round_trip(
         ["approval", "issue", "delete", "--operator", "ops", "--json"],
     )
     assert issue.exit_code == 0, issue.output
-    assert json.loads(issue.stdout)["token"] == "token-value"
+    expected_token = "token-value"  # noqa: S105
+    assert json.loads(issue.stdout)["token"] == expected_token
 
     opened = service.start_incident(title="api-timeout", severity="warn")
     status = CliRunner().invoke(cli.app, ["incident", "status", str(opened["id"]), "--json"])

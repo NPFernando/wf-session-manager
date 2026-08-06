@@ -103,7 +103,7 @@ class HealthConfig(BaseModel):
     idle_sessions_ttl_seconds: float = Field(default=1800.0, ge=5.0, le=3600.0)
     idle_after_days: int = Field(default=30, ge=1, le=365)
     idle_auto_wait_days: int = Field(default=0, ge=0, le=365)
-    custom_checks: tuple["CustomHealthCheckConfig", ...] = ()
+    custom_checks: tuple[CustomHealthCheckConfig, ...] = ()
 
     @field_validator("project_scan_roots")
     @classmethod
@@ -178,7 +178,12 @@ class ApprovalConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     enabled: bool = False
     code: str = ""
-    guarded_actions: tuple[str, ...] = ("delete", "stop-session", "bulk-stop-command", "remove-metadata")
+    guarded_actions: tuple[str, ...] = (
+        "delete",
+        "stop-session",
+        "bulk-stop-command",
+        "remove-metadata",
+    )
     token_signing_secret: str = ""
     token_ttl_seconds: int = Field(default=900, ge=30, le=86_400)
     dual_control_enabled: bool = False
@@ -242,7 +247,7 @@ class SelfHealRuleConfig(BaseModel):
     max_sessions: int = Field(default=5, ge=1, le=200)
 
     @model_validator(mode="after")
-    def validate_action_requirements(self) -> "SelfHealRuleConfig":
+    def validate_action_requirements(self) -> SelfHealRuleConfig:
         if self.action == "playbook" and not self.playbook.strip():
             raise ValueError("self-heal rule with action=playbook requires playbook")
         if self.action == "chain" and not self.chain.strip():
@@ -281,7 +286,8 @@ class RemediationChainConfig(BaseModel):
                 normalized.append(value)
                 continue
             raise ValueError(
-                "invalid remediation chain step; expected playbook:<name>, archive, or recover-repair"
+                "invalid remediation chain step; expected playbook:<name>, "
+                "archive, or recover-repair"
             )
         return tuple(normalized)
 

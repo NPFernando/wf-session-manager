@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import getpass
 import hashlib
 import hmac
-import getpass
 import io
 import json
 import os
@@ -357,11 +357,7 @@ class SessionService:
         allowed_raw = active.get("allowed_actions")
         if not isinstance(allowed_raw, list):
             return True
-        allowed = {
-            str(item).strip()
-            for item in allowed_raw
-            if str(item).strip()
-        }
+        allowed = {str(item).strip() for item in allowed_raw if str(item).strip()}
         if not allowed:
             return True
         return "*" in allowed or action in allowed
@@ -380,8 +376,7 @@ class SessionService:
             else "*"
         )
         raise WsError(
-            f"action blocked by operator profile '{profile_name}': {action} "
-            f"(allowed: {allowed})"
+            f"action blocked by operator profile '{profile_name}': {action} (allowed: {allowed})"
         )
 
     @contextlib.contextmanager
@@ -659,8 +654,12 @@ class SessionService:
             anchor = record.last_attached_at or record.updated_at
             if (now - anchor) < timedelta(days=days):
                 continue
-            self.store.save(record.model_copy(update={"task_state": TaskState.WAITING, "updated_at": now}))
-            self.append_timeline(record.name, "idle-policy", f"Auto-marked waiting after {days}d idle")
+            self.store.save(
+                record.model_copy(update={"task_state": TaskState.WAITING, "updated_at": now})
+            )
+            self.append_timeline(
+                record.name, "idle-policy", f"Auto-marked waiting after {days}d idle"
+            )
             changed += 1
         return changed
 
@@ -924,7 +923,9 @@ class SessionService:
             ):
                 merged_tags = list(dict.fromkeys([*request.tags, *default_tags]))
                 merged_note = request.note or default_task
-                logging_enabled = request.logging_enabled if default_logging is None else default_logging
+                logging_enabled = (
+                    request.logging_enabled if default_logging is None else default_logging
+                )
                 effective_request = request.model_copy(
                     update={
                         "project": detected_project,
@@ -944,7 +945,10 @@ class SessionService:
                 message = validation.errors[0] if validation.errors else "invalid session request"
                 if message.startswith("session already exists"):
                     raise SessionExistsError(message)
-                if message.startswith("command not found") or "disabled in configuration" in message:
+                if (
+                    message.startswith("command not found")
+                    or "disabled in configuration" in message
+                ):
                     raise ToolUnavailableError(message)
                 raise WsError(message)
             name = validation.normalized_name
@@ -952,7 +956,9 @@ class SessionService:
             profile = self.config.tools[effective_request.tool]
             shell_profile = self.config.tools[Tool.SHELL]
             if not profile.enabled:
-                raise ToolUnavailableError(f"{effective_request.tool.value} is disabled in configuration")
+                raise ToolUnavailableError(
+                    f"{effective_request.tool.value} is disabled in configuration"
+                )
             if not command_available(profile.command):
                 raise ToolUnavailableError(f"command not found: {profile.command[0]}")
             if not command_available(shell_profile.command):
@@ -1012,7 +1018,9 @@ class SessionService:
                 self._delete_log_path(log_path)
                 raise
             self.append_timeline(name, "created", f"{record.tool.value} {record.cwd}")
-            self.emit_hook("session.created", {"name": name, "tool": record.tool.value, "cwd": str(record.cwd)})
+            self.emit_hook(
+                "session.created", {"name": name, "tool": record.tool.value, "cwd": str(record.cwd)}
+            )
             return self.get(name)
 
     def _log_path(self, record: SessionMetadata) -> Path:
@@ -1307,11 +1315,13 @@ class SessionService:
                         "previous_pinned": previous["pinned"],
                     },
                 )
-            if record_undo and (
-                "task_state" in updates or "input_state" in updates
-            ) and (
-                record.task_state != updated.task_state
-                or record.input_state != updated.input_state
+            if (
+                record_undo
+                and ("task_state" in updates or "input_state" in updates)
+                and (
+                    record.task_state != updated.task_state
+                    or record.input_state != updated.input_state
+                )
             ):
                 self._push_undo(
                     "organize-status",
@@ -1341,7 +1351,9 @@ class SessionService:
                 self.store.replace(old_name, updated)
             except StateError:
                 if live:
-                    self.backend.rename_session(new_name, old_name, expected_id=record.tmux_session_id)
+                    self.backend.rename_session(
+                        new_name, old_name, expected_id=record.tmux_session_id
+                    )
                 raise
             self.append_timeline(new_name, "renamed", f"{old_name} -> {new_name}")
             self.emit_hook("session.renamed", {"old_name": old_name, "new_name": new_name})
@@ -1466,7 +1478,9 @@ class SessionService:
             was_logging = live and self.get(name).logging_enabled
             existing = ""
             with contextlib.suppress(Exception):
-                existing = self._read_log(name, self.config.log_lines * 4, self.config.log_bytes * 4).text
+                existing = self._read_log(
+                    name, self.config.log_lines * 4, self.config.log_bytes * 4
+                ).text
             self._push_undo("delete-logs", {"name": name, "content": existing}, ttl_minutes=30)
             if was_logging:
                 self.backend.set_logging(name, None, expected_id=record.tmux_session_id)
@@ -1610,7 +1624,8 @@ class SessionService:
         sessions = self.list_sessions()[: max(1, limit_sessions)]
         grouped: dict[str, set[str]] = {}
         ignored = re.compile(
-            r"(?i)^(?:tokens?|context|model|working directory|approval|session id|[-=]{3,}|[>$#]\s*)"
+            r"(?i)^(?:tokens?|context|model|working directory|approval|session id|"
+            r"[-=]{3,}|[>$#]\s*)"
         )
         for session in sessions:
             try:
@@ -1632,11 +1647,7 @@ class SessionService:
                     continue
                 seen.add(key)
                 grouped.setdefault(key, set()).add(session.name)
-        return {
-            line: sorted(names)
-            for line, names in grouped.items()
-            if len(names) >= 2
-        }
+        return {line: sorted(names) for line, names in grouped.items() if len(names) >= 2}
 
     def auto_handoff(
         self,
@@ -1650,7 +1661,10 @@ class SessionService:
         items: list[dict[str, object]] = []
         for session in sessions:
             details = self.inspect_snapshot(session)
-            timeline = [event.model_dump(mode="json") for event in self.timeline(session.name, limit=include_timeline)]
+            timeline = [
+                event.model_dump(mode="json")
+                for event in self.timeline(session.name, limit=include_timeline)
+            ]
             items.append(
                 {
                     "name": session.name,
@@ -1719,7 +1733,9 @@ class SessionService:
         )
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         generated_at = utc_now().isoformat()
-        warnings = [check for check in health if check.status in {HealthStatus.WARN, HealthStatus.FAIL}]
+        warnings = [
+            check for check in health if check.status in {HealthStatus.WARN, HealthStatus.FAIL}
+        ]
         federation_payload: dict[str, object] = {
             "enabled": include_federation,
             "hosts": list(federation_hosts),
@@ -1777,7 +1793,9 @@ class SessionService:
                     indent=2,
                 ),
             )
-            add_tar_text(archive, "audit.log", "\n".join(audit_lines) + ("\n" if audit_lines else ""))
+            add_tar_text(
+                archive, "audit.log", "\n".join(audit_lines) + ("\n" if audit_lines else "")
+            )
             if include_federation:
                 add_tar_text(
                     archive,
@@ -1829,13 +1847,17 @@ class SessionService:
         rows = self._incident_rows()
         if not selected_status:
             return rows
-        return [row for row in rows if str(row.get("status", "")).strip().lower() == selected_status]
+        return [
+            row for row in rows if str(row.get("status", "")).strip().lower() == selected_status
+        ]
 
     def get_incident(self, incident_id: str) -> dict[str, object]:
         normalized = slugify_name(incident_id)
         if not normalized:
             raise WsError(f"invalid incident id: {incident_id!r}")
-        row = next((item for item in self._incident_rows() if str(item.get("id", "")) == normalized), None)
+        row = next(
+            (item for item in self._incident_rows() if str(item.get("id", "")) == normalized), None
+        )
         if row is None:
             raise WsError(f"incident not found: {incident_id}")
         return row
@@ -1912,9 +1934,13 @@ class SessionService:
             if summary is not None:
                 selected["summary"] = summary.strip()
             if sessions is not None:
-                selected["sessions"] = sorted({str(name).strip() for name in sessions if str(name).strip()})
+                selected["sessions"] = sorted(
+                    {str(name).strip() for name in sessions if str(name).strip()}
+                )
             if hosts is not None:
-                selected["hosts"] = sorted({str(host).strip() for host in hosts if str(host).strip()})
+                selected["hosts"] = sorted(
+                    {str(host).strip() for host in hosts if str(host).strip()}
+                )
             updated_at = utc_now().isoformat()
             selected["updated_at"] = updated_at
             events_raw = selected.get("events", [])
@@ -1983,7 +2009,7 @@ class SessionService:
                 self.paths.incidents_file,
             ):
                 if item.exists():
-                    archive.add(item, arcname=item.name if item.is_file() else item.name)
+                    archive.add(item, arcname=item.name)
         os.chmod(target, 0o600)
         return target
 
@@ -2034,9 +2060,13 @@ class SessionService:
             try:
                 data = json.loads(result.stdout)
             except ValueError:
-                rows.append({"host": host, "error": "invalid JSON from remote host", "sessions": []})
+                rows.append(
+                    {"host": host, "error": "invalid JSON from remote host", "sessions": []}
+                )
                 continue
-            rows.append({"host": host, "error": "", "sessions": data if isinstance(data, list) else []})
+            rows.append(
+                {"host": host, "error": "", "sessions": data if isinstance(data, list) else []}
+            )
         return rows
 
     def federated_action(
@@ -2288,7 +2318,9 @@ class SessionService:
             "stdout": result.stdout,
             "stderr": result.stderr,
             "returncode": result.returncode,
-            "error": "" if result.returncode == 0 else (result.stderr.strip() or f"exit {result.returncode}"),
+            "error": ""
+            if result.returncode == 0
+            else (result.stderr.strip() or f"exit {result.returncode}"),
         }
 
     def federation_capability_matrix(
@@ -2304,7 +2336,9 @@ class SessionService:
         }
         rows: list[dict[str, object]] = []
         for host in configured_hosts:
-            session_row = session_rows.get(host, {"host": host, "error": "host unavailable", "sessions": []})
+            session_row = session_rows.get(
+                host, {"host": host, "error": "host unavailable", "sessions": []}
+            )
             command_probe = self._remote_ws_probe(host, "--help")
             command_help = str(command_probe.get("stdout", ""))
             command_caps: dict[str, dict[str, object]] = {}
@@ -2427,11 +2461,26 @@ class SessionService:
 
     def suggest_fixes(self, output: str) -> list[str]:
         rules: tuple[tuple[re.Pattern[str], str], ...] = (
-            (re.compile(r"session limit|usage limit", re.IGNORECASE), "Wait for quota reset, then run ws resume."),
-            (re.compile(r"command not found", re.IGNORECASE), "Verify configured tool command in config.toml and PATH."),
-            (re.compile(r"permission denied", re.IGNORECASE), "Check executable and file permissions for the working directory."),
-            (re.compile(r"no such file|not found", re.IGNORECASE), "Confirm cwd/project path exists before restarting the session."),
-            (re.compile(r"timed out|timeout", re.IGNORECASE), "Retry with stable network or reduce workload; consider ws report for triage."),
+            (
+                re.compile(r"session limit|usage limit", re.IGNORECASE),
+                "Wait for quota reset, then run ws resume.",
+            ),
+            (
+                re.compile(r"command not found", re.IGNORECASE),
+                "Verify configured tool command in config.toml and PATH.",
+            ),
+            (
+                re.compile(r"permission denied", re.IGNORECASE),
+                "Check executable and file permissions for the working directory.",
+            ),
+            (
+                re.compile(r"no such file|not found", re.IGNORECASE),
+                "Confirm cwd/project path exists before restarting the session.",
+            ),
+            (
+                re.compile(r"timed out|timeout", re.IGNORECASE),
+                "Retry with stable network or reduce workload; consider ws report for triage.",
+            ),
         )
         suggestions: list[str] = []
         for pattern, hint in rules:
@@ -2466,11 +2515,11 @@ class SessionService:
         for hook in hooks:
             try:
                 self.runner(
-                    hook.command + (event, data),
+                    (*hook.command, event, data),
                     capture=True,
                     timeout=hook.timeout_seconds,
                 )
-            except Exception:
+            except (OSError, RuntimeError, subprocess.SubprocessError, ValueError):
                 continue
 
     def integrity_report(self) -> dict[str, list[str]]:
@@ -2528,7 +2577,9 @@ class SessionService:
                             repaired["timeline"].append(path.name)
             return repaired
 
-    def _read_json_object(self, path: Path, *, default: dict[str, object] | None = None) -> dict[str, object]:
+    def _read_json_object(
+        self, path: Path, *, default: dict[str, object] | None = None
+    ) -> dict[str, object]:
         if not path.exists():
             return dict(default or {})
         if path.is_symlink():
@@ -2672,7 +2723,7 @@ class SessionService:
 
     @staticmethod
     def _approval_action_matches(required_action: str, token_action: str) -> bool:
-        if token_action == "*":
+        if token_action == "*":  # noqa: S105
             return True
         if required_action == token_action:
             return True
@@ -2702,14 +2753,12 @@ class SessionService:
     def approval_requirement(self, action: str) -> dict[str, object]:
         active = self.active_operator_profile()
         requires_profile = bool(active.get("require_approvals"))
-        requires_config = (
-            self.config.approvals.enabled
-            and action in set(self.config.approvals.guarded_actions)
+        requires_config = self.config.approvals.enabled and action in set(
+            self.config.approvals.guarded_actions
         )
         required = requires_profile or requires_config
-        dual = (
-            self.config.approvals.dual_control_enabled
-            and action in set(self.config.approvals.dual_control_actions)
+        dual = self.config.approvals.dual_control_enabled and action in set(
+            self.config.approvals.dual_control_actions
         )
         return {
             "required": required,
@@ -2738,9 +2787,13 @@ class SessionService:
             )
             if profile and profile.approval_code and code != profile.approval_code:
                 code_valid = False
-        if self.config.approvals.enabled and action in self.config.approvals.guarded_actions:
-            if self.config.approvals.code and code != self.config.approvals.code:
-                code_valid = False
+        if (
+            self.config.approvals.enabled
+            and action in self.config.approvals.guarded_actions
+            and self.config.approvals.code
+            and code != self.config.approvals.code
+        ):
+            code_valid = False
         valid_operators = self._valid_approval_operators(action, approval_tokens)
         minimum_approvers = int(requirement.get("minimum_approvers", 1))
         if bool(requirement.get("dual_control")):
@@ -2807,7 +2860,7 @@ class SessionService:
             visiting.add(node)
             best = [node]
             for parent in graph.get(node, []):
-                candidate = walk(parent) + [node]
+                candidate = [*walk(parent), node]
                 if len(candidate) > len(best):
                     best = candidate
             visiting.discard(node)
@@ -2844,7 +2897,9 @@ class SessionService:
             text = query.strip()
             if not text:
                 raise WsError("search query cannot be empty")
-            payload = self._read_json_object(self.paths.search_queries_file, default={"queries": {}})
+            payload = self._read_json_object(
+                self.paths.search_queries_file, default={"queries": {}}
+            )
             raw = payload.get("queries", {})
             queries = raw if isinstance(raw, dict) else {}
             queries[normalized] = text
@@ -2867,7 +2922,9 @@ class SessionService:
     def delete_search_query(self, name: str) -> None:
         with self._guarded_action("search-query-delete"):
             normalized = slugify_name(name)
-            payload = self._read_json_object(self.paths.search_queries_file, default={"queries": {}})
+            payload = self._read_json_object(
+                self.paths.search_queries_file, default={"queries": {}}
+            )
             raw = payload.get("queries", {})
             queries = raw if isinstance(raw, dict) else {}
             if normalized not in queries:
@@ -2986,7 +3043,9 @@ class SessionService:
             )
             self.append_audit("federation-dashboard.deleted", normalized)
 
-    def _federation_host_metrics(self, rows: Sequence[dict[str, object]]) -> dict[str, dict[str, object]]:
+    def _federation_host_metrics(
+        self, rows: Sequence[dict[str, object]]
+    ) -> dict[str, dict[str, object]]:
         metrics: dict[str, dict[str, object]] = {}
         for row in rows:
             host = str(row.get("host", "")).strip()
@@ -3139,7 +3198,11 @@ class SessionService:
             }
         )
         if hosts:
-            selected = [host for host in selected if host in {str(h).strip() for h in hosts if str(h).strip()}]
+            selected = [
+                host
+                for host in selected
+                if host in {str(h).strip() for h in hosts if str(h).strip()}
+            ]
 
         drifts: list[dict[str, object]] = []
         for host in selected:
@@ -3307,10 +3370,7 @@ class SessionService:
                 or session.task_state.value.casefold() == state_filter
                 or session.runtime.value.casefold() == state_filter
             )
-            and (
-                not tag_filter
-                or any(item.casefold() == tag_filter for item in session.tags)
-            )
+            and (not tag_filter or any(item.casefold() == tag_filter for item in session.tags))
         ]
         by_name = {session.name: session for session in sessions}
         normalized_terms = [term.casefold() for term in terms]
@@ -3366,7 +3426,9 @@ class SessionService:
                 row["related_sessions"] = [
                     item.name
                     for item in sessions
-                    if item.name != session.name and item.project == session.project and session.project
+                    if item.name != session.name
+                    and item.project == session.project
+                    and session.project
                 ][:5]
         return ordered[:limit]
 
@@ -3419,7 +3481,9 @@ class SessionService:
             if builtin is None:
                 raise WsError(f"playbook not found: {name}")
             source = "builtin"
-            commands = tuple(tuple(str(part) for part in command) for command in builtin["commands"])
+            commands = tuple(
+                tuple(str(part) for part in command) for command in builtin["commands"]
+            )
             match_any = tuple(str(item) for item in builtin.get("match_any", ()))
             timeout_seconds = float(builtin.get("timeout_seconds", 10.0))
         else:
@@ -3497,12 +3561,18 @@ class SessionService:
         if apply:
             chaos_dir = self.paths.cache_dir / "chaos"
             chaos_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-            marker = chaos_dir / f"chaos-{datetime.now().astimezone().strftime('%Y%m%d-%H%M%S')}.txt"
+            marker = (
+                chaos_dir / f"chaos-{datetime.now().astimezone().strftime('%Y%m%d-%H%M%S')}.txt"
+            )
             marker.write_text("synthetic-chaos-artifact\n", encoding="utf-8")
             artifacts.append(str(marker))
         checks = self.refresh_health_alerts(force=True)
-        failures = [check.model_dump(mode="json") for check in checks if check.status is HealthStatus.FAIL]
-        warnings = [check.model_dump(mode="json") for check in checks if check.status is HealthStatus.WARN]
+        failures = [
+            check.model_dump(mode="json") for check in checks if check.status is HealthStatus.FAIL
+        ]
+        warnings = [
+            check.model_dump(mode="json") for check in checks if check.status is HealthStatus.WARN
+        ]
         return {
             "applied": apply,
             "artifacts": artifacts,
@@ -3520,7 +3590,9 @@ class SessionService:
         chain = next((item for item in self.config.remediation_chains if item.name == name), None)
         if chain is None:
             raise WsError(f"remediation chain not found: {name}")
-        selected_alerts = list(alerts) if alerts is not None else self.refresh_health_alerts(force=True)
+        selected_alerts = (
+            list(alerts) if alerts is not None else self.refresh_health_alerts(force=True)
+        )
         matched = [
             check
             for check in selected_alerts
@@ -3570,8 +3642,12 @@ class SessionService:
                 break
             steps.append(row)
 
-        summary = f"{name} apply={apply} triggered={bool(matched) or not chain.when_checks} ok={chain_ok}"
-        self.append_audit("remediation-chain.run" if apply else "remediation-chain.preview", summary)
+        summary = (
+            f"{name} apply={apply} triggered={bool(matched) or not chain.when_checks} ok={chain_ok}"
+        )
+        self.append_audit(
+            "remediation-chain.run" if apply else "remediation-chain.preview", summary
+        )
         return {
             "name": chain.name,
             "applied": apply,
@@ -3585,7 +3661,9 @@ class SessionService:
     def self_heal(self, *, apply: bool = False) -> dict[str, object]:
         config = self.config.self_heal
         checks = self.refresh_health_alerts(force=True)
-        alerts = [check for check in checks if check.status in {HealthStatus.WARN, HealthStatus.FAIL}]
+        alerts = [
+            check for check in checks if check.status in {HealthStatus.WARN, HealthStatus.FAIL}
+        ]
         if not config.enabled:
             return {
                 "enabled": False,
@@ -3676,9 +3754,7 @@ class SessionService:
                     action_payload["error"] = str(error)
             actions.append(action_payload)
 
-        summary = (
-            f"apply={apply} alerts={len(alerts)} actions={len(actions)}"
-        )
+        summary = f"apply={apply} alerts={len(alerts)} actions={len(actions)}"
         self.append_audit("self-heal.run" if apply else "self-heal.preview", summary)
         return {
             "enabled": True,
@@ -3801,14 +3877,20 @@ class SessionService:
         status_on_failure = str(getattr(custom, "status_on_failure", "warn"))
         corrective_action = str(getattr(custom, "corrective_action", "") or "")
         if not command:
-            return HealthCheck(name=f"custom:{name}", status=HealthStatus.INFO, detail="no command configured")
+            return HealthCheck(
+                name=f"custom:{name}", status=HealthStatus.INFO, detail="no command configured"
+            )
         try:
-            result = self.runner(command, capture=True, timeout=self.config.health.subprocess_timeout)
+            result = self.runner(
+                command, capture=True, timeout=self.config.health.subprocess_timeout
+            )
         except (OSError, subprocess.SubprocessError) as error:
             mapped = (
-                HealthStatus.FAIL if status_on_failure == "fail" else
-                HealthStatus.INFO if status_on_failure == "info" else
-                HealthStatus.WARN
+                HealthStatus.FAIL
+                if status_on_failure == "fail"
+                else HealthStatus.INFO
+                if status_on_failure == "info"
+                else HealthStatus.WARN
             )
             return HealthCheck(
                 name=f"custom:{name}",
@@ -3820,11 +3902,15 @@ class SessionService:
             detail = result.stdout.strip() or "ok"
             return HealthCheck(name=f"custom:{name}", status=HealthStatus.PASS, detail=detail)
         mapped = (
-            HealthStatus.FAIL if status_on_failure == "fail" else
-            HealthStatus.INFO if status_on_failure == "info" else
-            HealthStatus.WARN
+            HealthStatus.FAIL
+            if status_on_failure == "fail"
+            else HealthStatus.INFO
+            if status_on_failure == "info"
+            else HealthStatus.WARN
         )
-        detail = (result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}")[:200]
+        detail = (result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}")[
+            :200
+        ]
         return HealthCheck(
             name=f"custom:{name}",
             status=mapped,
@@ -3848,7 +3934,10 @@ class SessionService:
                     matched = True
                 if session.task_state is TaskState.BLOCKED and age_hours >= rule.blocked_hours:
                     matched = True
-                if session.input_state is InputState.REQUIRED and age_hours >= rule.input_required_hours:
+                if (
+                    session.input_state is InputState.REQUIRED
+                    and age_hours >= rule.input_required_hours
+                ):
                     matched = True
                 if not matched:
                     continue
@@ -3858,7 +3947,9 @@ class SessionService:
                 elif rule.severity == "warn" and highest is not HealthStatus.FAIL:
                     highest = HealthStatus.WARN
         if not violations:
-            return HealthCheck(name="sla-alerts", status=HealthStatus.PASS, detail="no SLA violations")
+            return HealthCheck(
+                name="sla-alerts", status=HealthStatus.PASS, detail="no SLA violations"
+            )
         return HealthCheck(
             name="sla-alerts",
             status=highest,

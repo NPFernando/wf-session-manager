@@ -231,9 +231,7 @@ def test_create_session_translates_duplicate_race_to_session_exists_error(
         }
     )
     with pytest.raises(SessionExistsError, match="claude-api"):
-        TmuxBackend(runner).create_session(
-            "claude-api", tmp_path, ("/bin/bash", "-l"), None
-        )
+        TmuxBackend(runner).create_session("claude-api", tmp_path, ("/bin/bash", "-l"), None)
 
 
 def test_rename_session_translates_duplicate_race_to_session_exists_error() -> None:

@@ -8,8 +8,8 @@ import pytest
 
 from conftest import FakeBackend
 from workspace_session_manager.config import (
-    ApprovalConfig,
     AppConfig,
+    ApprovalConfig,
     HealthConfig,
     OperatorProfileConfig,
     PlaybookConfig,
@@ -1309,13 +1309,14 @@ def test_operator_profile_selection_and_approval(
 def test_signed_approval_token_passes_guarded_action(
     service: SessionService,
 ) -> None:
+    signing_secret = "unit-test-signing-secret"  # noqa: S105
     service.config = service.config.model_copy(
         update={
             "approvals": ApprovalConfig(
                 enabled=True,
                 code="1234",
                 guarded_actions=("delete",),
-                token_signing_secret="secret",
+                token_signing_secret=signing_secret,
             )
         }
     )
@@ -1328,12 +1329,13 @@ def test_signed_approval_token_passes_guarded_action(
 def test_dual_control_requires_distinct_token_operators(
     service: SessionService,
 ) -> None:
+    signing_secret = "unit-test-signing-secret"  # noqa: S105
     service.config = service.config.model_copy(
         update={
             "approvals": ApprovalConfig(
                 enabled=True,
                 guarded_actions=("federation-action:resume:vm-a",),
-                token_signing_secret="secret",
+                token_signing_secret=signing_secret,
                 dual_control_enabled=True,
                 dual_control_actions=("federation-action:resume:vm-a",),
             )
@@ -1506,7 +1508,12 @@ def test_federation_action_plan_reports_blast_radius_and_missing_approval(
                 "host": "vm-a",
                 "error": "",
                 "sessions": [
-                    {"name": "a1", "runtime": "detached", "task_state": "blocked", "input_state": "required"}
+                    {
+                        "name": "a1",
+                        "runtime": "detached",
+                        "task_state": "blocked",
+                        "input_state": "required",
+                    }
                 ],
             }
         ],
@@ -1602,7 +1609,12 @@ def test_fleet_snapshot_and_live_diff_detects_operational_drift(
                     "host": "vm-a",
                     "error": "",
                     "sessions": [
-                        {"name": "a1", "runtime": "attached", "task_state": "in_progress", "tool": "claude"}
+                        {
+                            "name": "a1",
+                            "runtime": "attached",
+                            "task_state": "in_progress",
+                            "tool": "claude",
+                        }
                     ],
                 }
             ]
@@ -1611,8 +1623,18 @@ def test_fleet_snapshot_and_live_diff_detects_operational_drift(
                 "host": "vm-a",
                 "error": "",
                 "sessions": [
-                    {"name": "a1", "runtime": "detached", "task_state": "blocked", "tool": "copilot"},
-                    {"name": "a2", "runtime": "stopped", "task_state": "blocked", "tool": "copilot"},
+                    {
+                        "name": "a1",
+                        "runtime": "detached",
+                        "task_state": "blocked",
+                        "tool": "copilot",
+                    },
+                    {
+                        "name": "a2",
+                        "runtime": "stopped",
+                        "task_state": "blocked",
+                        "tool": "copilot",
+                    },
                 ],
             }
         ]
@@ -1867,7 +1889,10 @@ def test_export_incident_bundle_contains_expected_artifacts(
 
 
 def test_export_incident_bundle_includes_crosshost_federation_evidence(
-    service: SessionService, fake_backend: FakeBackend, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    service: SessionService,
+    fake_backend: FakeBackend,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     created = service.create(CreateRequest(name="incident-fed", tool=Tool.SHELL, cwd=tmp_path))
     fake_backend.previews[created.name] = "federated incident detail"
@@ -1879,11 +1904,11 @@ def test_export_incident_bundle_includes_crosshost_federation_evidence(
     monkeypatch.setattr(
         service,
         "federated_action",
-        lambda action, hosts=None, args=(): [
-            {"host": "vm-a", "ok": True, "error": "", "stdout": json.dumps({"checks": []})}
-        ]
-        if action == "health"
-        else [{"host": "vm-a", "ok": True, "error": "", "stdout": json.dumps({"sessions": 1})}],
+        lambda action, hosts=None, args=(): (
+            [{"host": "vm-a", "ok": True, "error": "", "stdout": json.dumps({"checks": []})}]
+            if action == "health"
+            else [{"host": "vm-a", "ok": True, "error": "", "stdout": json.dumps({"sessions": 1})}]
+        ),
     )
 
     bundle = service.export_incident_bundle(
@@ -1910,9 +1935,7 @@ def test_self_heal_preview_runs_matching_policies_and_writes_audit(
 ) -> None:
     service.config = service.config.model_copy(
         update={
-            "playbooks": (
-                PlaybookConfig(name="diag", commands=(("echo", "ok"),)),
-            ),
+            "playbooks": (PlaybookConfig(name="diag", commands=(("echo", "ok"),)),),
             "self_heal": SelfHealConfig(
                 enabled=True,
                 rules=(
@@ -1984,7 +2007,11 @@ def test_remediation_chain_runs_and_supports_rollback_playbook(
             HealthCheck(name="disk-space", status=HealthStatus.WARN, detail="low disk")
         ],
     )
-    monkeypatch.setattr(service, "integrity_report", lambda: {"presets": [], "filter_presets": [], "templates": [], "timeline": []})
+    monkeypatch.setattr(
+        service,
+        "integrity_report",
+        lambda: {"presets": [], "filter_presets": [], "templates": [], "timeline": []},
+    )
     payload = service.run_remediation_chain("chain-a", apply=False)
     assert payload["triggered"] is True
     assert payload["steps"]

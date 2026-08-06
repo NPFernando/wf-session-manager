@@ -49,9 +49,9 @@ from workspace_session_manager.tui import (
     FilterScreen,
     FilterState,
     HealthAlertsScreen,
-    InterfaceControlsScreen,
     IdentityOrganizationScreen,
     InteractionMode,
+    InterfaceControlsScreen,
     LogScreen,
     ManageSessionScreen,
     MoreActionsScreen,
@@ -101,9 +101,8 @@ async def wait_for_create_validation(pilot: Pilot[object], screen: CreateSession
 
 async def wait_for_confirmation(pilot: Pilot[object], app: WsApp) -> ConfirmActionScreen:
     for _ in range(40):
-        if isinstance(app.screen, ConfirmActionScreen):
-            if app.screen.query("#confirm-submit"):
-                return app.screen
+        if isinstance(app.screen, ConfirmActionScreen) and app.screen.query("#confirm-submit"):
+            return app.screen
         await pilot.pause(0.05)
     raise AssertionError("confirmation screen did not open")
 
@@ -2677,7 +2676,9 @@ async def test_manage_fits_all_categories_at_120x35(service: SessionService) -> 
 async def test_manage_modal_shows_display_name_full_id_and_shortcuts(
     service: SessionService,
 ) -> None:
-    name = create_managed(service, "https-astrology-fernandofamily-com-en-pancha-pakshi", Tool.CODEX)
+    name = create_managed(
+        service, "https-astrology-fernandofamily-com-en-pancha-pakshi", Tool.CODEX
+    )
     app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
     async with app.run_test(size=(120, 35)) as pilot:
         await pilot.press("d")
@@ -2686,7 +2687,9 @@ async def test_manage_modal_shows_display_name_full_id_and_shortcuts(
         assert "Display name" in context
         assert "Full ID" in context
         assert name in context
-        option = screen.query_one("#manage-actions", OptionList).get_option("manage-action:identity")
+        option = screen.query_one("#manage-actions", OptionList).get_option(
+            "manage-action:identity"
+        )
         assert "[e]" in str(option.prompt)
 
 
@@ -3194,6 +3197,7 @@ async def test_high_latency_triggers_auto_safe_mode_and_live_perf_stats(
         assert "perf ssh-safe(auto)" in header
         assert "rows/" in header
 
+
 @pytest.mark.asyncio
 async def test_modal_cancel_restores_dashboard_focus(service: SessionService) -> None:
     create_managed(service, "focus", Tool.SHELL)
@@ -3371,7 +3375,9 @@ async def test_health_alerts_view_sessions_focuses_related_warning_sessions(
         detail="1 stopped session untouched for 14+ days",
         corrective_action="Review stopped sessions.",
     )
-    monkeypatch.setattr(service, "refresh_health_alerts", lambda force=False, only=None: [warning_check])
+    monkeypatch.setattr(
+        service, "refresh_health_alerts", lambda force=False, only=None: [warning_check]
+    )
     monkeypatch.setattr(service, "cached_health_alerts", lambda: [warning_check])
     app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
     async with app.run_test(size=(120, 35)) as pilot:
@@ -3750,8 +3756,7 @@ async def test_federation_control_center_safe_mode_reduces_scan_budget(
     def fake_federated_sessions(hosts=None):
         selected = list(hosts) if hosts else [f"vm-{index:02d}" for index in range(60)]
         return [
-            {"host": host, "error": "", "sessions": [{"name": f"{host}-a"}]}
-            for host in selected
+            {"host": host, "error": "", "sessions": [{"name": f"{host}-a"}]} for host in selected
         ]
 
     monkeypatch.setattr(service, "federated_sessions", fake_federated_sessions)
