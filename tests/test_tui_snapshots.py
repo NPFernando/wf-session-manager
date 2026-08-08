@@ -27,14 +27,14 @@ from workspace_session_manager.tui import (
 
 SnapCompare = Callable[..., bool]
 FUTURE_ACTIVITY = datetime(2099, 1, 1, tzinfo=UTC)
-pytestmark = pytest.mark.layout_snapshot
+pytestmark = [pytest.mark.layout_snapshot, pytest.mark.integration]
 
 _ORIGINAL_EXPORT_SVG = Console.export_svg
 
 
 def _export_svg_stable(self: Console, *args: object, **kwargs: object) -> str:
     rendered = _ORIGINAL_EXPORT_SVG(self, *args, **kwargs)
-    return re.sub(r"terminal-\\d+", "terminal", rendered)
+    return re.sub(r"terminal-\d+", "terminal", rendered)
 
 
 Console.export_svg = _export_svg_stable

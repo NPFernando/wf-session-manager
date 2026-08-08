@@ -1096,9 +1096,23 @@ class CreateSessionScreen(ModalScreen[CreateFormResult | None]):
                 yield Static("Tool", classes="form-section")
                 with Horizontal(classes="form-row"):
                     yield Label("Tool", classes="field-label")
+                    if self.service is None:
+                        tool_options = [(TOOL_LABELS[tool], tool.value) for tool in Tool]
+                    else:
+                        tool_options = [
+                            (TOOL_LABELS[tool], tool.value)
+                            for tool in Tool
+                            if self.service.config.tools.get(tool) is not None
+                            and self.service.config.tools[tool].enabled
+                        ]
+                    if not tool_options:
+                        tool_options = [(TOOL_LABELS[tool], tool.value) for tool in Tool]
+                    selected_tool = self.default_tool.value
+                    if selected_tool not in {value for _, value in tool_options}:
+                        selected_tool = tool_options[0][1]
                     yield Select(
-                        [(TOOL_LABELS[tool], tool.value) for tool in Tool],
-                        value=self.default_tool.value,
+                        tool_options,
+                        value=selected_tool,
                         allow_blank=False,
                         compact=True,
                         id="create-tool",
@@ -9359,6 +9373,13 @@ class WsApp(App[str | None]):
         except WsError as error:
             self.notify(str(error), severity="warning")
             return
+        profile = self.service.config.tools.get(preset.tool)
+        if profile is None or not profile.enabled:
+            self.notify(
+                f"{TOOL_LABELS[preset.tool]} preset is disabled in config.toml.",
+                severity="warning",
+            )
+            return
         self._animate_workspace_transition("forward")
         self._begin_overlay(InteractionMode.FORM)
         self.push_screen(
@@ -9393,6 +9414,14 @@ class WsApp(App[str | None]):
         except WsError as error:
             self._restore_dashboard_mode()
             self.notify(str(error), severity="warning")
+            return
+        profile = self.service.config.tools.get(preset.tool)
+        if profile is None or not profile.enabled:
+            self._restore_dashboard_mode()
+            self.notify(
+                f"{TOOL_LABELS[preset.tool]} preset is disabled in config.toml.",
+                severity="warning",
+            )
             return
         self.push_screen(
             CreateSessionScreen(
