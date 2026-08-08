@@ -53,7 +53,9 @@ def deterministic_color(monkeypatch: pytest.MonkeyPatch) -> None:
             return frozen if tz is not None else frozen.replace(tzinfo=None)
 
     monkeypatch.setattr("workspace_session_manager.service.datetime", FrozenDateTime)
+    monkeypatch.setattr("workspace_session_manager.models.datetime", FrozenDateTime)
     monkeypatch.setattr("workspace_session_manager.store.datetime", FrozenDateTime)
+    monkeypatch.setattr("workspace_session_manager.tui.datetime", FrozenDateTime)
 
 
 def add_session(

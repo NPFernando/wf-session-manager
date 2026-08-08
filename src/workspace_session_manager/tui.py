@@ -5048,6 +5048,8 @@ class LogScreen(Screen[str | None]):
         local = self.captured_at.astimezone()
         if self.show_absolute_time:
             return f"Captured {local:%H:%M:%S %Z}"
+        if os.environ.get("WS_SNAPSHOT_MODE") == "1":
+            return "Updated now"
         app_now = getattr(self.app, "_now_utc", None)
         current = app_now() if callable(app_now) else ui_now_utc()
         age = max(0, int((current - self.captured_at).total_seconds()))
@@ -7861,6 +7863,8 @@ class WsApp(App[str | None]):
     def _activity_spark_for(self, session: SessionView) -> str:
         if not self.has_class("wide") and not self.has_class("very-wide"):
             return ""
+        if os.environ.get("WS_SNAPSHOT_MODE") == "1":
+            return ""
         identity = (session.name, session.session_id)
         history = self._activity_history.get(identity)
         if history is None or len(history) < ACTIVITY_SPARK_MIN_SAMPLES:
@@ -8138,6 +8142,10 @@ class WsApp(App[str | None]):
             self._expected_option_id = selected.id
             self._select_option(selected.id)
         else:
+            # Invalidate any in-flight detail refresh so stale callbacks can't
+            # repaint the inspector after the empty state is rendered.
+            self._detail_generation += 1
+            self._detail_refreshing = False
             self.selected_name = None
             self.selected_session_id = None
             self._render_empty_state()
