@@ -7544,8 +7544,6 @@ class WsApp(App[str | None]):
             request = request_by_identity.get(identity)
             if current is None or request is None:
                 continue
-            if identity == (self.selected_name, self.selected_session_id):
-                continue
             if self._attention_notice_revisions.get(identity, 0) != request.notice_revision:
                 continue
             if result.error:
