@@ -1388,6 +1388,18 @@ async def test_create_defaults_to_first_enabled_tool(service: SessionService) ->
 
 
 @pytest.mark.asyncio
+async def test_create_form_session_id_max_length_matches_model_limit(
+    service: SessionService,
+) -> None:
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("c")
+        await pilot.pause()
+        assert isinstance(app.screen, CreateSessionScreen)
+        assert app.screen.query_one("#create-name", Input).max_length == 80
+
+
+@pytest.mark.asyncio
 async def test_create_form_tool_options_only_show_enabled_profiles(
     service: SessionService,
 ) -> None:

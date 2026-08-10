@@ -1124,7 +1124,7 @@ class CreateSessionScreen(ModalScreen[CreateFormResult | None]):
                     yield Input(
                         placeholder="api_refactor",
                         compact=True,
-                        max_length=200,
+                        max_length=80,
                         id="create-name",
                     )
                 yield Static(
