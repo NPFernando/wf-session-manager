@@ -1341,6 +1341,7 @@ class CreateSessionScreen(ModalScreen[CreateFormResult | None]):
         tool = Tool(str(self.query_one("#create-tool", Select).value))
         cwd = Path(self.query_one("#create-cwd", Input).value).expanduser()
         name = self.query_one("#create-name", Input).value.strip()
+        note_text = self.query_one("#create-note", TextArea).text.strip()
         automatic_prefix = self.query_one("#create-prefix", Switch).value
         if self.service:
             validation = self.service.validate_create(
@@ -1446,7 +1447,12 @@ class CreateSessionScreen(ModalScreen[CreateFormResult | None]):
             tag_error or "Tags are valid",
             visible="tags" in self._touched,
         )
-        errors = [issue for issue in (name_error, cwd_error, tool_error, tag_error) if issue]
+        note_error = ""
+        if len(note_text) > 2000:
+            note_error = "Task description must be 2000 characters or fewer."
+        errors = [
+            issue for issue in (name_error, cwd_error, tool_error, tag_error, note_error) if issue
+        ]
         validation_lines = [
             ("valid", f"Directory exists: {display_path(resolved_cwd)}")
             if resolved_cwd is not None
@@ -1460,6 +1466,9 @@ class CreateSessionScreen(ModalScreen[CreateFormResult | None]):
             ("valid", f"Project detected: {detected_project}")
             if detected_project
             else ("warning", "Project not detected"),
+            ("valid", "Task description length is valid")
+            if not note_error
+            else ("invalid", note_error),
         ]
         validation = Text()
         markers = {"valid": "✓", "warning": "!", "invalid": "\u00d7"}
@@ -1478,7 +1487,7 @@ class CreateSessionScreen(ModalScreen[CreateFormResult | None]):
                     tool=tool,
                     cwd=resolved_cwd,
                     project=project_input.value.strip(),
-                    note=self.query_one("#create-note", TextArea).text.strip(),
+                    note=note_text,
                     tags=tags,
                     task_state=TaskState(str(self.query_one("#create-task-state", Select).value)),
                     logging_enabled=self.query_one("#create-logging", Switch).value,
