@@ -39,6 +39,7 @@ from workspace_session_manager.service import SessionService
 from workspace_session_manager.tui import (
     ACTIVITY_SPARK_MIN_SAMPLES,
     THEME_MODES,
+    TOOL_LABELS,
     ConfirmActionScreen,
     CreateFailureScreen,
     CreateSessionScreen,
@@ -1387,6 +1388,82 @@ async def test_create_defaults_to_first_enabled_tool(service: SessionService) ->
 
 
 @pytest.mark.asyncio
+async def test_create_form_tool_options_only_show_enabled_profiles(
+    service: SessionService,
+) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "tools": {
+                **service.config.tools,
+                Tool.CLAUDE: service.config.tools[Tool.CLAUDE].model_copy(
+                    update={"enabled": False}
+                ),
+                Tool.HERMES: service.config.tools[Tool.HERMES].model_copy(
+                    update={"enabled": False}
+                ),
+            }
+        }
+    )
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("c")
+        await pilot.pause()
+        assert isinstance(app.screen, CreateSessionScreen)
+        options = [
+            str(option[0]) for option in app.screen.query_one("#create-tool", Select)._options
+        ]
+        assert "Claude" not in options
+        assert "Hermes" not in options
+        assert "Copilot" in options
+        assert "Codex" in options
+        assert "Shell" in options
+
+
+@pytest.mark.asyncio
+async def test_create_form_with_disabled_default_tool_falls_back_to_first_enabled(
+    service: SessionService,
+) -> None:
+    service.config = service.config.model_copy(
+        update={
+            "tools": {
+                **service.config.tools,
+                Tool.CLAUDE: service.config.tools[Tool.CLAUDE].model_copy(
+                    update={"enabled": False}
+                ),
+            }
+        }
+    )
+    app = WsApp(service, monochrome=False, onboarding=False)
+    screen = CreateSessionScreen(
+        Path("/tmp"),
+        service=service,
+        default_tool=Tool.CLAUDE,
+    )
+    async with app.run_test(size=(120, 35)) as pilot:
+        app.push_screen(screen)
+        await pilot.pause()
+        assert screen.query_one("#create-tool", Select).value == Tool.COPILOT.value
+
+
+@pytest.mark.asyncio
+async def test_create_form_without_service_shows_all_tool_profiles(
+    service: SessionService,
+) -> None:
+    app = WsApp(service, monochrome=False, onboarding=False)
+    screen = CreateSessionScreen(
+        Path("/tmp"),
+        service=None,
+        default_tool=Tool.HERMES,
+    )
+    async with app.run_test(size=(120, 35)) as pilot:
+        app.push_screen(screen)
+        await pilot.pause()
+        options = [str(option[0]) for option in screen.query_one("#create-tool", Select)._options]
+        assert options == [TOOL_LABELS[tool] for tool in Tool]
+        assert screen.query_one("#create-tool", Select).value == Tool.HERMES.value
+
+
+@pytest.mark.asyncio
 async def test_create_form_shows_command_error_when_tool_command_missing(
     service: SessionService,
     tmp_path: Path,
@@ -1562,6 +1639,35 @@ async def test_palette_can_open_create_form_from_saved_preset(service: SessionSe
 
 
 @pytest.mark.asyncio
+async def test_palette_create_from_preset_rejects_disabled_preset_tool(
+    service: SessionService,
+) -> None:
+    service.save_preset("backend-dev", tool=Tool.HERMES, cwd=Path("/tmp"))
+    service.config = service.config.model_copy(
+        update={
+            "tools": {
+                **service.config.tools,
+                Tool.HERMES: service.config.tools[Tool.HERMES].model_copy(
+                    update={"enabled": False}
+                ),
+            }
+        }
+    )
+    app = WsApp(service, monochrome=False, onboarding=False)
+    notifications: list[tuple[str, dict[str, object]]] = []
+    app.notify = lambda message, **kwargs: notifications.append((message, kwargs))
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("p")
+        app.screen.query_one(Input).value = "preset: backend-dev"
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert notifications
+        assert "preset is disabled in config.toml" in notifications[-1][0]
+        assert not isinstance(app.screen, CreateSessionScreen)
+
+
+@pytest.mark.asyncio
 async def test_palette_alias_can_open_interface_controls(service: SessionService) -> None:
     create_managed(service, "first", Tool.SHELL)
     app = WsApp(service, monochrome=False, onboarding=False)
@@ -1626,6 +1732,34 @@ async def test_preset_launcher_blank_option_opens_default_create_form(
 
         assert isinstance(app.screen, CreateSessionScreen)
         assert app.screen.query_one("#create-tool", Select).value == Tool.CLAUDE.value
+
+
+@pytest.mark.asyncio
+async def test_preset_launcher_rejects_disabled_preset_tool(service: SessionService) -> None:
+    service.save_preset("backend-dev", tool=Tool.HERMES, cwd=Path("/tmp"))
+    service.config = service.config.model_copy(
+        update={
+            "tools": {
+                **service.config.tools,
+                Tool.HERMES: service.config.tools[Tool.HERMES].model_copy(
+                    update={"enabled": False}
+                ),
+            }
+        }
+    )
+    app = WsApp(service, monochrome=False, onboarding=False)
+    notifications: list[tuple[str, dict[str, object]]] = []
+    app.notify = lambda message, **kwargs: notifications.append((message, kwargs))
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("o")
+        await pilot.pause()
+        options = app.screen.query_one("#preset-launcher-options", OptionList)
+        options.highlighted = 1
+        await pilot.press("enter")
+        await pilot.pause()
+        assert notifications
+        assert "preset is disabled in config.toml" in notifications[-1][0]
+        assert not isinstance(app.screen, CreateSessionScreen)
 
 
 @pytest.mark.asyncio
