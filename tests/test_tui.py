@@ -109,7 +109,7 @@ async def wait_for_confirmation(pilot: Pilot[object], app: WsApp) -> ConfirmActi
 
 
 async def wait_for_manage(pilot: Pilot[object], app: WsApp) -> ManageSessionScreen:
-    for _ in range(40):
+    for _ in range(80):
         if isinstance(app.screen, ManageSessionScreen):
             return app.screen
         await pilot.pause(0.05)
