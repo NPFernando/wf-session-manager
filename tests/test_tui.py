@@ -1400,6 +1400,26 @@ async def test_create_form_session_id_max_length_matches_model_limit(
 
 
 @pytest.mark.asyncio
+async def test_create_form_rejects_task_description_over_model_limit(
+    service: SessionService,
+    tmp_path: Path,
+) -> None:
+    app = WsApp(service, monochrome=False, onboarding=False)
+    async with app.run_test(size=(120, 35)) as pilot:
+        await pilot.press("c")
+        form = app.screen
+        assert isinstance(form, CreateSessionScreen)
+        form.query_one("#create-name", Input).value = "api-refactor"
+        form.query_one("#create-cwd", Input).value = str(tmp_path)
+        form.query_one("#create-note", TextArea).text = "x" * 2001
+        await wait_for_create_validation(pilot, form)
+
+        assert form.query_one("#create-submit", Button).disabled
+        validation = str(form.query_one("#create-validation", Static).content)
+        assert "Task description must be 2000 characters or fewer." in validation
+
+
+@pytest.mark.asyncio
 async def test_create_form_tool_options_only_show_enabled_profiles(
     service: SessionService,
 ) -> None:
