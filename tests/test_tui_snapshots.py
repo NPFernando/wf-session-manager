@@ -36,8 +36,7 @@ CI_FLAKY_LOG_SNAPSHOTS = pytest.mark.skipif(
 CI_FLAKY_LAYOUT_SNAPSHOTS = pytest.mark.skipif(
     os.environ.get("GITHUB_ACTIONS") == "true",
     reason=(
-        "Some layout SVG snapshots are currently flaky in GitHub Actions "
-        "across Python versions."
+        "Some layout SVG snapshots are currently flaky in GitHub Actions across Python versions."
     ),
 )
 
