@@ -1961,7 +1961,7 @@ class IdentityOrganizationScreen(ModalScreen[OrganizationEditResult | None]):
             )
             yield Static("", id="identity-display-status", classes="field-status")
             yield Label("Session ID", classes="field-label")
-            yield Input(value=self.session.name, max_length=200, id="identity-name")
+            yield Input(value=self.session.name, max_length=80, id="identity-name")
             yield Static("", id="identity-name-status", classes="field-status")
             yield Label("Project", classes="field-label")
             yield Input(value=self.session.project, max_length=200, id="identity-project")

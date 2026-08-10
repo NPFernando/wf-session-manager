@@ -2918,6 +2918,7 @@ async def test_manage_identity_edit_returns_with_filter_and_new_identity(
         await pilot.press("d", "/", *"identity", "enter", "enter")
         assert isinstance(app.screen, IdentityOrganizationScreen)
         identity = app.screen
+        assert identity.query_one("#identity-name", Input).max_length == 80
         identity.query_one("#identity-display-name", Input).value = "Renamed Workflow"
         identity.query_one("#identity-name", Input).value = "renamed session"
         await wait_for_identity_validation(pilot, identity)
