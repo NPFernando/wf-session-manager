@@ -2264,6 +2264,30 @@ async def test_attention_scan_finds_unselected_warning_and_restores_temporary_vi
 
 
 @pytest.mark.asyncio
+async def test_attention_scan_marks_selected_warning_session(
+    service: SessionService,
+    fake_backend: FakeBackend,
+) -> None:
+    selected = create_managed(service, "selected-warning", Tool.CODEX)
+    fake_backend.previews[selected] = (
+        "Warning: Codex usage limit reached\nRetry available: tomorrow at 10:00"
+    )
+    app = WsApp(service, monochrome=False, onboarding=False, no_animation=True)
+
+    async with app.run_test(size=(120, 35)) as pilot:
+        await wait_for_detail_refresh(pilot, app)
+        await wait_for_attention_scan(pilot, app)
+        assert app.selected_name == selected
+        assert "1 warning" in str(app.query_one("#app-header", Static).content)
+        session = app.sessions[0]
+        option = app.query_one("#sessions", OptionList).get_option(
+            session_option_id(session.name, session.session_id)
+        )
+        assert "!" in str(option.prompt)
+        assert "Codex usage limit reached" in str(app.query_one("#activity", Static).content)
+
+
+@pytest.mark.asyncio
 async def test_apply_filter_preset_updates_grouping_density_and_quick_filter(
     service: SessionService,
 ) -> None:
