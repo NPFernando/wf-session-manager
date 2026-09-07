@@ -1242,7 +1242,13 @@ class SessionService:
         return self._managed_record(name, require_live=True)
 
     def attach(self, name: str) -> int:
-        self.get(name)
+        session = self.get(name)
+        if session.runtime in {RuntimeState.STOPPED, RuntimeState.FAILED}:
+            # The tmux session is gone but the metadata record survives; revive it
+            # in place (same name/cwd/tool, preserving note/tags/history) instead of
+            # failing with "session not found", so a stopped session can be
+            # continued with a single attach/resume call.
+            self.restart(name)
         record = self._owned_record(name)
         self.store.save(
             record.model_copy(update={"last_attached_at": utc_now(), "updated_at": utc_now()})

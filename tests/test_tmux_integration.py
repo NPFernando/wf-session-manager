@@ -39,6 +39,8 @@ def test_real_tmux_create_capture_and_guarded_delete(tmp_path: Path) -> None:
             backend.get_option(name, "@wf_owner", expected_id=created.session_id)
             == "workspace-session-manager"
         )
+        assert backend.get_option(name, "mouse", expected_id=created.session_id) == "on"
+        assert backend.get_option(name, "set-clipboard", expected_id=created.session_id) == "on"
         backend.capture_pane(name, 10, expected_id=created.session_id)
     finally:
         live = next((item for item in backend.list_sessions() if item.name == name), None)
