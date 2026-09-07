@@ -1983,9 +1983,17 @@ def ssh_profiler_command(
 
 @app.command()
 def attach(context: typer.Context, name: str) -> None:
-    """Attach or switch to an existing tmux session."""
+    """Attach or switch to an existing tmux session.
+
+    If the session's tmux pane is stopped, it is transparently restarted
+    (preserving its note, tags, and history) before attaching.
+    """
+    service = runtime_from_context(context).service()
     try:
-        runtime_from_context(context).service().attach(name)
+        session = service.get(name)
+        if session.runtime in {RuntimeState.STOPPED, RuntimeState.FAILED}:
+            typer.echo(f"Session {name!r} is stopped; restarting before attaching...")
+        service.attach(name)
     except WsError as error:
         abort(error)
 

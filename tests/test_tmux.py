@@ -214,6 +214,68 @@ class DispatchRunner:
         return self.responses[subcommand]
 
 
+class SequencedCreateRunner:
+    """Simulates the session not existing until after ``new-session`` runs,
+    matching real tmux's behavior across the create/verify call sequence."""
+
+    def __init__(self, session_id: str, name: str) -> None:
+        self.session_id = session_id
+        self.name = name
+        self.calls: list[tuple[str, ...]] = []
+        self._created = False
+
+    def __call__(
+        self,
+        args: Sequence[str],
+        *,
+        capture: bool = True,
+        timeout: float | None = 5.0,
+    ) -> subprocess.CompletedProcess[str]:
+        del capture, timeout
+        self.calls.append(tuple(args))
+        subcommand = args[1]
+        if subcommand == "list-sessions":
+            if self._created:
+                line = live_session_line(session_id=self.session_id, name=self.name)
+                return subprocess.CompletedProcess(
+                    args=(), returncode=0, stdout=f"{line}\n", stderr=""
+                )
+            return subprocess.CompletedProcess(
+                args=(), returncode=1, stdout="", stderr="no server running"
+            )
+        if subcommand == "new-session":
+            self._created = True
+            return subprocess.CompletedProcess(
+                args=(), returncode=0, stdout=f"{self.session_id}\n", stderr=""
+            )
+        return subprocess.CompletedProcess(args=(), returncode=0, stdout="", stderr="")
+
+
+def test_create_session_enables_mouse_and_clipboard_options(tmp_path: Path) -> None:
+    runner = SequencedCreateRunner(session_id="$9", name="claude-api")
+    TmuxBackend(runner).create_session("claude-api", tmp_path, ("/bin/bash", "-l"), None)
+    set_option_calls = [call for call in runner.calls if call[1] == "set-option"]
+    assert ("tmux", "set-option", "-q", "-t", "$9:", "mouse", "on") in set_option_calls
+    assert (
+        "tmux",
+        "set-option",
+        "-q",
+        "-t",
+        "$9:",
+        "set-clipboard",
+        "on",
+    ) in set_option_calls
+    assert (
+        "tmux",
+        "set-option",
+        "-q",
+        "-t",
+        "$9:",
+        "@wf_owner",
+        "workspace-session-manager",
+    ) in set_option_calls
+
+
 def test_create_session_translates_duplicate_race_to_session_exists_error(
     tmp_path: Path,
 ) -> None:

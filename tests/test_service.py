@@ -199,6 +199,30 @@ def test_attach_refuses_name_reused_after_ownership_check(
     assert fake_backend.attached == []
 
 
+def test_attach_revives_stopped_session_preserving_metadata(
+    service: SessionService,
+    fake_backend: FakeBackend,
+    tmp_path: Path,
+) -> None:
+    created = service.create(
+        CreateRequest(name="revive", tool=Tool.SHELL, cwd=tmp_path, note="keep me")
+    )
+    organized = service.organize(created.name, tags=["important"])
+    assert organized.tags == ["important"]
+
+    # Simulate the tmux session dying while the ws metadata record survives.
+    del fake_backend.sessions[created.name]
+    assert service.get(created.name).runtime is RuntimeState.STOPPED
+
+    service.attach(created.name)
+
+    assert created.name in fake_backend.attached
+    revived = service.get(created.name)
+    assert revived.runtime is not RuntimeState.STOPPED
+    assert revived.note == "keep me"
+    assert revived.tags == ["important"]
+
+
 def test_runtime_and_activity_come_from_tmux_snapshot(
     service: SessionService,
     fake_backend: FakeBackend,

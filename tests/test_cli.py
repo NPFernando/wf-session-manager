@@ -112,6 +112,26 @@ def test_quickstart_bootstraps_config_and_attaches(
     assert created.name in service.backend.attached
 
 
+def test_attach_command_restarts_and_reports_stopped_session(
+    service: SessionService,
+    fake_backend: FakeBackend,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = Runtime(paths=service.paths, config=AppConfig())
+    monkeypatch.setattr(cli, "build_runtime", lambda config=None: runtime)
+    monkeypatch.setattr(Runtime, "service", lambda self: service)
+
+    created = service.create(CreateRequest(name="stopped-shell", tool=Tool.SHELL, cwd=tmp_path))
+    del fake_backend.sessions[created.name]
+
+    result = CliRunner().invoke(cli.app, ["attach", created.name])
+    assert result.exit_code == 0, result.output
+    assert "restarting" in result.output.lower()
+    assert created.name in fake_backend.attached
+    assert fake_backend.session_exists(created.name)
+
+
 def test_quickstart_no_attach_respected(
     service: SessionService,
     monkeypatch: pytest.MonkeyPatch,

@@ -215,6 +215,12 @@ class TmuxBackend:
                 "workspace-session-manager",
                 expected_id=created_id or None,
             )
+            # Enable mouse reporting and OSC 52 clipboard passthrough so drag-to-select
+            # copy and paste work out of the box for terminals attaching to this
+            # session (most terminal emulators, including the workspace UI's own
+            # xterm.js panel, honor these).
+            self.set_option(name, "mouse", "on", expected_id=created_id or None)
+            self.set_option(name, "set-clipboard", "on", expected_id=created_id or None)
             if agent_command:
                 self._send_command(created_id or f"={name}", agent_command)
             session = self.get_session(name)
